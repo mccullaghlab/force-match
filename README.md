@@ -4,7 +4,7 @@ Force Matching Python script and config file.
 To use this program, you should only edit "forcematchFiles.config". The Python script runs
 based on how the .config file is filled out.
 
-Place any .psf, .pdb, .dcd, and .force.dcd files of interest in the program's directory. In the .config file,
+Place any .psf, .pdb, .dcd, .force.dcd, or paraemeter files of interest in the program's directory. In the .config file,
 name the specific set of .psf, .dcd, and .force.dcd files which are to be analyzed the next time the program is run, and save the file.
 
 For example:
@@ -20,6 +20,9 @@ For example:
     
     COORD DCD FILES:
     nacl2_wwat.md.run2.out.dcd
+    
+    PARAMETER FILE:
+    par_all27_prot_lipid_na.inp
     
     DEBUG MODE: OFF
     
