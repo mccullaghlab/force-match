@@ -6,7 +6,7 @@ import MDAnalysis
 
 
 # FILE VARIABLES
-configFile = 'forcematchFiles3.config'
+configFile = 'forcematchFiles.config'
 psf = None
 pdb = None
 forceDcd = None
