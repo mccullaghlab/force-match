@@ -6,7 +6,7 @@ import MDAnalysis
 
 
 # FILE VARIABLES
-configFile = 'forcematchFiles2.config'
+configFile = 'forcematchFiles3.config'
 psf = None
 pdb = None
 forceDcd = None
@@ -22,9 +22,11 @@ debug = False
 # DEFUALT GLOBAL VARIABLES
 rMin = 0
 rMax = 25
+binSize = 0.1
+binCount = 0
 elecPermittivity = 8.854e-12      # electrical permittivity of vacuum C^2/Jm
 epsilon = []        # list of epsilon values for all non-solvent atoms
-sigma = []          # list of sigma values for all non-solvent atoms
+lj_rMin = []          # list of rMin values for all non-solvent atoms
 exTs = 0            # example time step used for log purposes
 
 # PLOT DATA VARIABLE
@@ -134,9 +136,9 @@ def getCoordBounds(cF, pdb):
     dims = dims[1], dims[2], dims[3]
     length1 = len("MIN DISTANCE: ")
     length2 = len("MAX DISTANCE: ")
+    length3 = len("BIN SIZE: ")
 
-    global rMin
-    global rMax
+    global rMin, rMax, binSize, binCount
 
     # scan config file for coord and bin values
     while line != "END CONFIG\n":
@@ -147,12 +149,19 @@ def getCoordBounds(cF, pdb):
         elif line[:length2] == "MAX DISTANCE: ":
             rem = -1 * (len(line) - length2)
             rMax = int(line[rem:-1])
+        elif line[:length3] == "BIN SIZE: ":
+            rem = -1 * (len(line) - length3)
+            binSize = float(line[rem:-1])
+
+    binCount = int((rMax - rMin)/binSize)
 
     if debug:
         print "--Dimensions of System--"
         print "\tTotal System Dimensions: {} A x {} A x {} A".format(dims[0], dims[1], dims[2])
         print "\tMin Interparticle Distance Considered: {} A".format(rMin)
         print "\tMax Interparticle Distance Considered: {} A".format(rMax)
+        print "\tBin Size Used: {}".format(binSize)
+        print "\tBin Count: {}".format(binCount)
 
 # Define subset of data without solvent
 def parseWater():
@@ -168,9 +177,7 @@ def parseWater():
 def initMDA():
     # start MDAnalysis with a universal
     # force universe
-    global force
-    global coord
-    global debug
+    global force, coord, debug
 
     force = MDAnalysis.Universe(psf, forceDcd)
     # coordinate universe
@@ -206,54 +213,52 @@ def printLogData(d):
         else:
             print("Coord and Force time step counts DO NOT MATCH\nCheck .config file for incorrect .dcd or .force.dcd file names.")
 
-######  Structure of computed data
-
-#    Using NaCl simulation as an example:
-
-#                           Na-Na                         Na-Cl                            Cl-Cl
-#    "plots"      |-----------|---------------|-------------|---------------|----------------|---
-#              SOD SOD   /  /   \   \      SOD CLA     /  /   \   \      CLA CLA        /  /   \   \
-#                        |  |   |   |                  |  |   |   |                     |  |   |   |
-#                        R Coul LJ  TotForce           R Coul LJ  TotForce              R Coul LJ  TotForce
-
-
 # Iterate through all pairs of particles in all simulations,
 #    identifying each pair of particles, performing computations,
 #    and storing the results in a data set
 def iterate():
     global plots
     if debug:
-        print "-- Iterating through all particle pairs in first time step"
+        print "-- Iterating through all particle pairs in first time step to establish pair types"
     for ts in coord.trajectory:                 # Iterate through all time steps
         for a in ionsCoord:                     # First particle
             for b in ionsCoord:                 # Second particle
-                if a.number != b.number:
+                if a.number != b.number:        # Ensure particles don't have same index
                     if ts.frame == 1:               # Determine particle pairs
                         if debug:
                             print "  Identified a {}-{} pair.".format(a.name, b.name)
                         if pairIsUnique(a, b):
                                 plots.append("{} {}".format(a.name, b.name))
-                                plots.append(assembleDataSet(a, b))
+                                plots.append(buildBlankDataSet(a, b))
+                                computeCoordData(a, b)
+                                computeForceData(a, b)
                         else:
-                            addData(assembleDataSet(a, b), plots[findPair(a, b)])
+                            computeCoordData(a, b)
+                            computeForceData(a, b)
+
                     else:
-                        addData(assembleDataSet(a, b), plots[findPair(a, b)])
+                        computeCoordData(a, b)
+                        computeForceData(a, b)
+
         if ts.frame == exTs:                        # Print a sample of the data we've computed
-            exampleTimestepDebug(a, b)
+            exampleTimestepDebug()
+
+    averageAll()
+    zeroToNan()
 
 # Identifies current particle pair, returns True if pair is unique (doesn't yet exist in plots array), False otherwise
 def pairIsUnique(a, b):
     pair = "{} {}".format(a.name, b.name)
     pairFlipped = "{} {}".format(b.name, a.name)
     if pair in plots:
-        print "\t{}-{} data set already found.".format(a.name, b.name)
+        print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
         return False
     elif pairFlipped in plots:
-        print "\t{}-{} data set already found.".format(a.name, b.name)
+        print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
         return False
     else:
         if debug:
-            print "\tBuilding new data set for all {}-{} pairs.".format(a.name, b.name)
+            print "\tBuilding new data set for all {}-{} pairs. Including new measurements.".format(a.name, b.name)
         return True
 
 # Returns the index of the data set of a given pair of atoms, assuming it exists in the plots array
@@ -265,41 +270,95 @@ def findPair(a, b):
     elif pairFlipped in plots:
         return plots.index(pairFlipped) + 1
 
-# Adds a set of data to a pre-existing data set
-def addData(newData, currentData):
-    for i in range (0, len(currentData)):
-        currentData[i].append(newData[i][0])
+# Builds a blank data set in which to accumulate data
+def buildBlankDataSet(a, b):
+    coul = numpy.zeros(binCount)
+    lJ = numpy.zeros(binCount)
+    totForce = numpy.zeros(binCount)
+    dataCounts = numpy.zeros(binCount)  # Keep track of the number of measurements made
+                                        # in each bin, for averaging purposes
 
-# Performs a series of computations on one pair of particles for one time step and returns the data
-def assembleDataSet(a, b):
-    magR = []
-    coul = []
-    lJ = []
-    totForce = []
-    dataSet = [magR, coul, lJ, totForce]
-    dataSet[0].append(computeMagR(a, b))              # Compute distance between particles
-    dataSet[1].append(computeCoulombic(a, b, dataSet[0][-1:][0]))         # Compute Coulombic potential of both particles
-    dataSet[2].append(computeLJ())                    # Compute Lennard-Jones potential of both particles
-    dataSet[3].append(computeTotalForce())            # Compute total force on both particles
+    dataSet = [coul, lJ, totForce, dataCounts]
     return dataSet
+
+# Performs a series of coordinate-related computations on one pair of particles for one time step and returns the data
+def computeCoordData(a, b):
+    global plots
+    magR = computeMagR(a, b)            # Determine distance between particles
+    if rMin <= magR < rMax:             # If distance is within specified range
+        binNo = int(magR / binSize)     #   determine the appropriate bin number
+        dataSet = findPair(a, b)
+        if binNo < binCount:
+            plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
+            plots[dataSet][1][binNo] += computeLJ(a, b, magR)
+            plots[dataSet][len(plots[dataSet]) - 1][binNo] += 1     # Increase measurement count by 1
+
+# Takes atoms in coord file and returns corresponding atoms in force file
+def findAtomsForce(a, b):
+    particleA = None
+    particleB = None
+
+    for i in ionsForce:
+        if i.number == a.number:
+            particleA = i
+        elif i.number == b.number:
+            particleB = i
+    return [particleA, particleB]
+
+# Performs a series of force computations on one pair of particles for one time step
+def computeForceData(a, b):
+    global plots
+    magR = computeMagR(a, b)
+    if rMin <= magR < rMax:
+        binNo = int(magR / binSize)
+        if binNo < binCount:
+            dataSet = findPair(a, b)
+            forceAtoms = findAtomsForce(a, b)
+            plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
+
+# Converts all running sums to averages
+def averageAll():
+    global plots
+    for i in range(0, len(plots)):                  # Sort through all particle pairings
+        if i % 2 == 1:
+            for f in range(0, len(plots[i])-1):
+                for c in range(0, len(plots[i][f])):   # Sort through all data sets
+                    if plots[i][-1:][0][c] != 0:
+                        plots[i][f][c] /= plots[i][-1:][0][c]  # Divide running sum by measurement count
+
+# Sets all uncomputed zeros to NaN
+def zeroToNan():
+    global plots
+    plotsLength = len(plots)
+    setLength = len(plots[1])
+    subsetLength = len(plots[1][0])
+    for set in range(1, plotsLength):
+        if set % 2 == 1:        # Skip over name elements, go into data elements
+            for e in range(0, setLength - 1):       # Iterate through data sets
+                for m in range(0, subsetLength - 1):       # Iterate through measurement counts
+                    if plots[set][setLength - 1][m] == 0:          # If there are zero measurements taken for a bin...
+                        for q in range(0, setLength - 1):
+                            plots[set][q][m] = numpy.nan           # Set that bin = NaN for all subsets
 
 # Extract LJ parameters from param file
 def defineEpsilonSigma(paramFile):
-    global epsilon, sigma
+    global epsilon, lj_rMin
+    print "-- Obtaining epsilon/(rMin/2) values from parameter file."
     txt = open(paramFile, 'r')
     line = txt.next().split()
-    while ((len(epsilon) < len(ionsCoord)) | (len(sigma) < len(ionsCoord))) & (line[0] != 'END'):
-        for i in range(len(epsilon), len(ionsCoord)):
-            if ionsCoord[i].name == line[0]:
-                # add epsilons in the order atoms are stored in ionsCoord
-                if i == (len(epsilon)):
-                    epsilon.append(float(line[2]))
-                    sigma.append(float(line[3]))
-
-        line = txt.next()
-        while line == '\n':
-            line = txt.next()
-        line = line.split()
+    while line[0] != 'END':
+        for a in ionsCoord:
+            if a.name == line[0]:
+                if a.name not in epsilon:
+                    epsilon.append(a.name)
+                    epsilon.append(line[2])
+                    lj_rMin.append(a.name)
+                    lj_rMin.append(line[3])
+                    print "{} Epsilon: {}\trMin/2: {}".format(a.name, epsilon[-1:][0], lj_rMin[-1:][0])
+        line = txt.next().split()
+        while (len(line) == 0):
+            line = txt.next().split()
+    print "\n"
 
 # Use coord dcd file to determine magnitude of distance R between two particles
 def computeMagR(a, b):
@@ -308,25 +367,63 @@ def computeMagR(a, b):
     return numpy.linalg.norm(r)
 
 # Use coord dcd file to determine coulombic potential of an atom in eV
-def computeCoulombic(a, b, r):
-    global magR, elecPermittivity
+def computeCoulombic(a, b, magR):
+    global elecPermittivity
     q1 = a.charge * 1.60217646e-19              # get particle charges (in units C)
     q2 = b.charge * 1.60217646e-19
-    r *= 1e-10       # obtain the distance we just computed (in units m)
-    p = (q1 * q2)/(4 * numpy.pi * elecPermittivity * r)
-    p *= 4184          # Convert from J to kcal/mol
+    magR *= 1e-10       # obtain the distance we just computed (in units m)
+    p = (q1 * q2)/(4 * numpy.pi * elecPermittivity * magR)
+    p /= 4184          # Convert from J to kcal/mol
+    p *= 6.022e23
     return p
 
 # Use coord dcd file to determine LJ potential of an atom
-def computeLJ():
-    return 0
+def computeLJ(a, b, magR):
+    epsA = 0
+    epsB = 0
+    rmA = 0
+    rmB = 0
+
+    # Define a single epsilon given the two particles
+    for i in range(0, len(epsilon)):
+        if epsilon[i] == a.name:
+            epsA = float(epsilon[i + 1])
+        elif epsilon[i] == b.name:
+            epsB = float(epsilon[i + 1])
+    eps = numpy.sqrt(epsA * epsB)
+
+    # Define a single rMin given the two particles
+    for i in range(0, len(lj_rMin)):
+        if lj_rMin[i] == a.name:
+            rmA = float(lj_rMin[i + 1])
+        elif lj_rMin[i] == b.name:
+            rmB = float(lj_rMin[i + 1])
+    rm = (rmA / 2) + (rmB / 2)
+
+    h = rm / magR
+    s = numpy.power(h, 12) - (2 * numpy.power(h, 6))
+    lj = eps * s
+    lj /= 4184
+    lj *= 6.022e23
+
+    #print " LJ ---- {} {} {} {} {}".format(eps, rm, h, s, lj)
+
+    return lj
 
 # Use force dcd file to examine total force interactions on particles
-def computeTotalForce():
-    return 0
+def computeTotalForce(magR, a, b, fA, fB):
+    forceA = fA.position
+    forceB = fB.position
 
-# Pring debug info at example timestep
-def exampleTimestepDebug(a, b):
+    r = a.position - b.position
+    rHat = r / magR
+
+    avgForce = (forceA - forceB) / 2
+    MagAvgF = numpy.linalg.norm(numpy.dot(avgForce, rHat))
+    return MagAvgF
+
+# Print debug info at example timestep
+def exampleTimestepDebug():
     global plots
     if debug:
         print "\n-- Sample of Data"
@@ -335,26 +432,48 @@ def exampleTimestepDebug(a, b):
         for i in range (0, len(plots)):
             if i % 2 == 0:
                 print "\t{}".format(plots[i])
-            else:
-                print "\t Current size: {} interactions".format(len(plots[i][0]))
-                print "\t Sample distance: {} A".format(plots[i][0][0])
-                print "\t Sample Coulombic {} kcal/mol".format(plots[i][1][0])
-
+        print "\n\tThis process takes some time, please wait."
 
 # Draw subplots for each data set
-def plotAllData(fitDegree=9, color='r'):
+def plotAllData(color='r'):
     global plots
     plt.close()
+
     for pair in range(0, len(plots)):
         if pair % 2 == 0:
-            f, (ax0, ax1) = plt.subplots(2, sharex=True)
-            ax0.scatter(plots[pair+1][0], plots[pair+1][1], c=color, s=15)
-            ax0.axis([rMin, rMax, -1e-15, 1e-15])
+            xAxis = numpy.arange(len(plots[pair+1][0])) * binSize
 
-            ax1.scatter(plots[pair+1][0], plots[pair+1][2], c=color, s=15)
+            # Plot Coulombic Potential and regression line
+            f, (ax0, ax1, ax2) = plt.subplots(3, sharex=True)
+            ax0.scatter(xAxis, plots[pair+1][0], c=color, s=15)
+            ax0.set_title("Coulombic Potential")
+            ax0.set_ylabel("Energy (kcal/mol)", fontsize=10)
+            coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
+            poly0 = numpy.poly1d(coef0)
+            ax0fit = poly0(xAxis)
+            ax0.plot(ax0fit)
 
-            plt.xlabel("Intermolecular distance", fontsize=10)
-            plt.suptitle("MD Analysis")
+            # Plot Lennard-Jones Potential and regression line
+            ax1.scatter(xAxis, plots[pair+1][1], c=color, s=15)
+            ax1.set_title("Lennard-Jones Potential")
+            ax1.set_ylabel("Energy (kcal/mol)", fontsize=10)
+            coef1 = numpy.polyfit(xAxis, plots[pair+1][1], 5)
+            poly1 = numpy.poly1d(coef1)
+            ax1fit = poly1(xAxis)
+            ax1.plot(ax1fit)
+
+            # Plot Total Force and regression line
+            ax2.scatter(xAxis, plots[pair+1][2], c=color, s=15)
+            ax2.set_title("Total Force")
+            ax2.set_ylabel("Avg Force", fontsize=10)
+            coef2 = numpy.polyfit(xAxis, plots[pair+1][2], 5)
+            poly2 = numpy.poly1d(coef2)
+            ax2fit = poly2(xAxis)
+            ax2.plot(ax2fit)
+
+            plt.xlabel("Intermolecular distance (Angstroms)", fontsize=10)
+            plt.suptitle("{} Interactions".format(plots[pair]))
+
     plt.show()
     '''
     # create figure with subplots
@@ -424,7 +543,6 @@ def main():
 
     # Generate figures and plots
     plotAllData()
-
 
 # Main program code
 main()
