@@ -16,7 +16,7 @@ force = None
 coord = None
 
 debug = False
-
+junkCounter = 0     # counter used for debugging
 
 
 # DEFUALT GLOBAL VARIABLES
@@ -251,10 +251,12 @@ def pairIsUnique(a, b):
     pair = "{} {}".format(a.name, b.name)
     pairFlipped = "{} {}".format(b.name, a.name)
     if pair in plots:
-        print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
+        if debug:
+            print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
         return False
     elif pairFlipped in plots:
-        print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
+        if debug:
+            print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
         return False
     else:
         if debug:
@@ -343,7 +345,8 @@ def zeroToNan():
 # Extract LJ parameters from param file
 def defineEpsilonSigma(paramFile):
     global epsilon, lj_rMin
-    print "-- Obtaining epsilon/(rMin/2) values from parameter file."
+    if debug:
+        print "-- Obtaining epsilon/(rMin/2) values from parameter file."
     txt = open(paramFile, 'r')
     line = txt.next().split()
     while line[0] != 'END':
@@ -354,11 +357,13 @@ def defineEpsilonSigma(paramFile):
                     epsilon.append(line[2])
                     lj_rMin.append(a.name)
                     lj_rMin.append(line[3])
-                    print "{} Epsilon: {}\trMin/2: {}".format(a.name, epsilon[-1:][0], lj_rMin[-1:][0])
+                    if debug:
+                        print "{} Epsilon: {}\trMin/2: {}".format(a.name, epsilon[-1:][0], lj_rMin[-1:][0])
         line = txt.next().split()
         while (len(line) == 0):
             line = txt.next().split()
-    print "\n"
+    if debug:
+        print "\n"
 
 # Use coord dcd file to determine magnitude of distance R between two particles
 def computeMagR(a, b):
@@ -379,35 +384,72 @@ def computeCoulombic(a, b, magR):
 
 # Use coord dcd file to determine LJ potential of an atom
 def computeLJ(a, b, magR):
-    epsA = 0
-    epsB = 0
-    rmA = 0
-    rmB = 0
+    global junkCounter
+    epsA = None
+    epsB = None
+    rmA = None
+    rmB = None
+
+    if debug & (junkCounter == 0):
+        print "\n-- Computing LJ Potential"
+        print "Particles:\n\tA: {}, B: {}".format(a.name, b.name)
 
     # Define a single epsilon given the two particles
     for i in range(0, len(epsilon)):
-        if epsilon[i] == a.name:
+        if (i % 2 == 0) & (epsA == None) & (epsilon[i] == a.name):
             epsA = float(epsilon[i + 1])
-        elif epsilon[i] == b.name:
+    for i in range(0, len(epsilon)):
+        if (i % 2 == 0) & (epsB == None) & (epsilon[i] == b.name):
             epsB = float(epsilon[i + 1])
-    eps = numpy.sqrt(epsA * epsB)
+
+    if debug & (junkCounter == 0):
+        print "epsA: {}\tepsB: {}".format(epsA, epsB)
+    if epsA == None:
+        epsA = 0
+    if epsB == None:
+        epsB = 0
+    eps = numpy.sqrt(epsA * epsB)       # Epsilon, the well depth
+
+    if debug & (junkCounter == 0):
+        print "\teps: {}".format(eps)
 
     # Define a single rMin given the two particles
     for i in range(0, len(lj_rMin)):
-        if lj_rMin[i] == a.name:
-            rmA = float(lj_rMin[i + 1])
-        elif lj_rMin[i] == b.name:
-            rmB = float(lj_rMin[i + 1])
-    rm = (rmA / 2) + (rmB / 2)
+        if (rmA == None) & (lj_rMin[i] == a.name):
+            rmA = float(lj_rMin[i + 1])     # rMin/2 value for particle A
+    for i in range(0, len(lj_rMin)):
+        if (rmB == None) & (lj_rMin[i] == b.name):
+            rmB = float(lj_rMin[i + 1])     # rMin/2 value for particle B
 
-    h = rm / magR
-    s = numpy.power(h, 12) - (2 * numpy.power(h, 6))
-    lj = eps * s
-    lj /= 4184
-    lj *= 6.022e23
+    if debug & (junkCounter == 0):
+        print "rmA: {}\trmB: {}".format(rmA, rmB)
 
-    #print " LJ ---- {} {} {} {} {}".format(eps, rm, h, s, lj)
+    # Catch cases to prevent compiler complaining
+    if rmA == None:
+        rmA = 0
+    if rmB == None:
+        rmB = 0
+        
+    rm = (rmA / 2) + (rmB / 2)              # rMin,i,j, value of V at rm is epsilon
 
+    if debug & (junkCounter == 0):
+        print "\trm = {}".format(rm)
+
+    '''
+    !V(Lennard-Jones) = Eps,i,j[(Rmin,i,j/ri,j)**12 - 2(Rmin,i,j/ri,j)**6]
+    !
+    !epsilon: kcal/mole, Eps,i,j = sqrt(eps,i * eps,j)
+    !Rmin/2: A, Rmin,i,j = Rmin/2,i + Rmin/2,j
+    '''
+    if debug & (junkCounter == 0):
+        print "V = eps * ((rm/magR)^12 - 2(rm/magR)^6)"
+
+    lj = eps * (numpy.power((rm/magR), 12) - (2 * numpy.power((rm/magR), 6)))
+
+    if debug & (junkCounter == 0):
+        print "eps = {} kcal/mol\t\trm = {} A\t\tmagR = {} A\t\tV = {} kcal/mol".format(eps, rm, magR, lj)
+
+    junkCounter = 1
     return lj
 
 # Use force dcd file to examine total force interactions on particles
@@ -418,7 +460,7 @@ def computeTotalForce(magR, a, b, fA, fB):
     r = a.position - b.position
     rHat = r / magR
 
-    avgForce = (forceA - forceB) / 2
+    avgForce = (forceA + forceB) / 2
     MagAvgF = numpy.linalg.norm(numpy.dot(avgForce, rHat))
     return MagAvgF
 
