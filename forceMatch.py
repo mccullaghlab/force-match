@@ -3,6 +3,7 @@ __author__ = 'Greg Poisson'
 import matplotlib.pyplot as plt
 import numpy
 import MDAnalysis
+import time
 
 
 # FILE VARIABLES
@@ -243,8 +244,7 @@ def iterate():
         if ts.frame == exTs:                        # Print a sample of the data we've computed
             exampleTimestepDebug()
 
-    averageAll()
-    zeroToNan()
+    postProcess()
 
 # Identifies current particle pair, returns True if pair is unique (doesn't yet exist in plots array), False otherwise
 def pairIsUnique(a, b):
@@ -277,10 +277,13 @@ def buildBlankDataSet(a, b):
     coul = numpy.zeros(binCount)
     lJ = numpy.zeros(binCount)
     totForce = numpy.zeros(binCount)
+    integF = numpy.zeros(binCount)
+
+    probDensity = numpy.zeros(binCount) # Probability density of data counts
     dataCounts = numpy.zeros(binCount)  # Keep track of the number of measurements made
                                         # in each bin, for averaging purposes
 
-    dataSet = [coul, lJ, totForce, dataCounts]
+    dataSet = [coul, lJ, totForce, integF, probDensity, dataCounts]
     return dataSet
 
 # Performs a series of coordinate-related computations on one pair of particles for one time step and returns the data
@@ -318,6 +321,28 @@ def computeForceData(a, b):
             forceAtoms = findAtomsForce(a, b)
             plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
 
+# Integrates a set of force data for a given pair of atoms
+def integrateForce():
+    global integF
+    for a in ionsCoord:
+        for b in ionsCoord:
+            if a.number != b.number:
+                index = findPair(a, b)
+                sum = 0
+
+                # Integrate the force data array, store in integrated force data array
+                for tf in range(0, len(plots[index][2]) - 1):
+                    tf = len(plots[index][2]) - 1 - tf
+                    sum += plots[index][2][tf]
+                    plots[index][3][tf] = sum
+
+# Perform post-datamining calculations
+def postProcess():
+    averageAll()
+    integrateForce()
+    distanceDistribution()
+    zeroToNan()
+
 # Converts all running sums to averages
 def averageAll():
     global plots
@@ -341,6 +366,22 @@ def zeroToNan():
                     if plots[set][setLength - 1][m] == 0:          # If there are zero measurements taken for a bin...
                         for q in range(0, setLength - 1):
                             plots[set][q][m] = numpy.nan           # Set that bin = NaN for all subsets
+
+# Convert distance frequency to distance probability distribution
+def distanceDistribution():
+    global plots
+    lastSet = len(plots)                             # index of last plots[] element (a set)
+    countSubsetIndex = len(plots[1])-1               # index of last subset in a set, containing
+                                                     #     observation counts at each bin length
+    probDistIndex = len(plots[1])-2                  # index of subset given for storing probability density data
+
+    for set in range(0, lastSet):
+        if set % 2 == 1:                            # set will reference all interaction pair datasets
+            mean = numpy.average(plots[set][countSubsetIndex])
+            std = numpy.std(plots[set][countSubsetIndex])
+            norm = (plots[set][countSubsetIndex] - mean) / std
+            distribution = norm / binSize
+            plots[set][probDistIndex] = distribution
 
 # Extract LJ parameters from param file
 def defineEpsilonSigma(paramFile):
@@ -390,10 +431,6 @@ def computeLJ(a, b, magR):
     rmA = None
     rmB = None
 
-    if debug & (junkCounter == 0):
-        print "\n-- Computing LJ Potential"
-        print "Particles:\n\tA: {}, B: {}".format(a.name, b.name)
-
     # Define a single epsilon given the two particles
     for i in range(0, len(epsilon)):
         if (i % 2 == 0) & (epsA == None) & (epsilon[i] == a.name):
@@ -402,16 +439,11 @@ def computeLJ(a, b, magR):
         if (i % 2 == 0) & (epsB == None) & (epsilon[i] == b.name):
             epsB = float(epsilon[i + 1])
 
-    if debug & (junkCounter == 0):
-        print "epsA: {}\tepsB: {}".format(epsA, epsB)
     if epsA == None:
         epsA = 0
     if epsB == None:
         epsB = 0
     eps = numpy.sqrt(epsA * epsB)       # Epsilon, the well depth
-
-    if debug & (junkCounter == 0):
-        print "\teps: {}".format(eps)
 
     # Define a single rMin given the two particles
     for i in range(0, len(lj_rMin)):
@@ -421,33 +453,15 @@ def computeLJ(a, b, magR):
         if (rmB == None) & (lj_rMin[i] == b.name):
             rmB = float(lj_rMin[i + 1])     # rMin/2 value for particle B
 
-    if debug & (junkCounter == 0):
-        print "rmA: {}\trmB: {}".format(rmA, rmB)
-
     # Catch cases to prevent compiler complaining
     if rmA == None:
         rmA = 0
     if rmB == None:
         rmB = 0
-        
-    rm = (rmA / 2) + (rmB / 2)              # rMin,i,j, value of V at rm is epsilon
 
-    if debug & (junkCounter == 0):
-        print "\trm = {}".format(rm)
-
-    '''
-    !V(Lennard-Jones) = Eps,i,j[(Rmin,i,j/ri,j)**12 - 2(Rmin,i,j/ri,j)**6]
-    !
-    !epsilon: kcal/mole, Eps,i,j = sqrt(eps,i * eps,j)
-    !Rmin/2: A, Rmin,i,j = Rmin/2,i + Rmin/2,j
-    '''
-    if debug & (junkCounter == 0):
-        print "V = eps * ((rm/magR)^12 - 2(rm/magR)^6)"
+    rm = (rmA) + (rmB)              # rMin,i,j, value of V at rm is epsilon
 
     lj = eps * (numpy.power((rm/magR), 12) - (2 * numpy.power((rm/magR), 6)))
-
-    if debug & (junkCounter == 0):
-        print "eps = {} kcal/mol\t\trm = {} A\t\tmagR = {} A\t\tV = {} kcal/mol".format(eps, rm, magR, lj)
 
     junkCounter = 1
     return lj
@@ -460,8 +474,8 @@ def computeTotalForce(magR, a, b, fA, fB):
     r = a.position - b.position
     rHat = r / magR
 
-    avgForce = (forceA + forceB) / 2
-    MagAvgF = numpy.linalg.norm(numpy.dot(avgForce, rHat))
+    avgForce = (forceA - forceB) / 2
+    MagAvgF = numpy.dot(avgForce, rHat)
     return MagAvgF
 
 # Print debug info at example timestep
@@ -485,36 +499,60 @@ def plotAllData(color='r'):
         if pair % 2 == 0:
             xAxis = numpy.arange(len(plots[pair+1][0])) * binSize
 
-            # Plot Coulombic Potential and regression line
-            f, (ax0, ax1, ax2) = plt.subplots(3, sharex=True)
+            # Plot Coulombic Potential
+            f, (ax0, ax1, ax2, ax3, ax4, ax5) = plt.subplots(6, sharex=True)
+
             ax0.scatter(xAxis, plots[pair+1][0], c=color, s=15)
+            ax0.plot(xAxis, plots[pair+1][0])
             ax0.set_title("Coulombic Potential")
             ax0.set_ylabel("Energy (kcal/mol)", fontsize=10)
-            coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
-            poly0 = numpy.poly1d(coef0)
-            ax0fit = poly0(xAxis)
-            ax0.plot(ax0fit)
+            #coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
+            #poly0 = numpy.poly1d(coef0)
+            #ax0fit = poly0(xAxis)
+            #ax0.plot(ax0fit)
 
-            # Plot Lennard-Jones Potential and regression line
+            # Plot Lennard-Jones Potential
             ax1.scatter(xAxis, plots[pair+1][1], c=color, s=15)
+            ax1.plot(xAxis, plots[pair+1][1])
             ax1.set_title("Lennard-Jones Potential")
             ax1.set_ylabel("Energy (kcal/mol)", fontsize=10)
-            coef1 = numpy.polyfit(xAxis, plots[pair+1][1], 5)
-            poly1 = numpy.poly1d(coef1)
-            ax1fit = poly1(xAxis)
-            ax1.plot(ax1fit)
+            #coef1 = numpy.polyfit(xAxis, plots[pair+1][1], 5)
+            #poly1 = numpy.poly1d(coef1)
+            #ax1fit = poly1(xAxis)
+            #ax1.plot(ax1fit)
 
-            # Plot Total Force and regression line
+
+            # Plot Total Force
             ax2.scatter(xAxis, plots[pair+1][2], c=color, s=15)
+            ax2.plot(xAxis, plots[pair+1][2])
             ax2.set_title("Total Force")
             ax2.set_ylabel("Avg Force", fontsize=10)
-            coef2 = numpy.polyfit(xAxis, plots[pair+1][2], 5)
-            poly2 = numpy.poly1d(coef2)
-            ax2fit = poly2(xAxis)
-            ax2.plot(ax2fit)
+            #coef2 = numpy.polyfit(xAxis, plots[pair+1][2], 5)
+            #poly2 = numpy.poly1d(coef2)
+            #ax2fit = poly2(xAxis)
+            #ax2.plot(ax2fit)
 
-            plt.xlabel("Intermolecular distance (Angstroms)", fontsize=10)
+            # Plot Integrated Force
+            ax3.scatter(xAxis, plots[pair+1][3], c=color, s=15)
+            ax3.plot(xAxis, plots[pair+1][3])
+            ax3.grid(True)
+            ax3.set_title("Integrated Force")
+            ax3.set_ylabel("Potential", fontsize=10)
+
+            # Plot Distance Distribution
+            ax4.scatter(xAxis, plots[pair+1][len(plots[pair+1])-1], c=color, s=15)
+            ax4.plot(xAxis, plots[pair+1][len(plots[pair+1])-1])
+            ax4.set_title("Frequency of Particle Distance")
+            ax4.set_ylabel("Occurrances")
+
+            plt.xlabel("Intermolecular Distance (Angstroms)", fontsize=10)
             plt.suptitle("{} Interactions".format(plots[pair]))
+
+            # Plot Probability Distribution of Distance Frequency
+            ax5.scatter(xAxis, plots[pair+1][len(plots[pair+1])-2], c=color, s=15)
+            ax5.plot(xAxis, plots[pair+1][len(plots[pair+1])-2])
+            ax5.set_title("Probability Density Distribution of Distance Frequency")
+            ax5.set_ylabel("Probability")
 
     plt.show()
     '''
@@ -550,8 +588,10 @@ def plotAllData(color='r'):
 
 # main program
 def main():
+
     # access global var for config file
     global configFile, pdb
+    start = time.time()
 
     # Read config setting for debug mode
     setDebug(configFile)
@@ -583,8 +623,13 @@ def main():
     # Iterate over time steps, and perform MD calculations
     iterate()
 
+    end = time.time()
+    t = end - start
+    print "Total running time: {} sec".format(t)
+
     # Generate figures and plots
     plotAllData()
+
 
 # Main program code
 main()
