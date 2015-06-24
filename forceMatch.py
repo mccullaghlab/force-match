@@ -15,6 +15,7 @@ coordDcd = None
 param = None
 force = None
 coord = None
+temperature = None
 
 debug = False
 junkCounter = 0     # counter used for debugging
@@ -26,6 +27,7 @@ rMax = 25
 binSize = 0.1
 binCount = 0
 elecPermittivity = 8.854e-12      # electrical permittivity of vacuum C^2/Jm
+boltzmann = 1.9872041e-3          # boltzmann constant in kcal/(K mol)
 epsilon = []        # list of epsilon values for all non-solvent atoms
 lj_rMin = []          # list of rMin values for all non-solvent atoms
 exTs = 0            # example time step used for log purposes
@@ -164,6 +166,20 @@ def getCoordBounds(cF, pdb):
         print "\tBin Size Used: {}".format(binSize)
         print "\tBin Count: {}".format(binCount)
 
+# Get temperature of system from config file
+def getTemp(cF):
+    global temperature
+    txt = open(cF, 'r')
+    while temperature is None:
+        line = txt.next().split()
+        if len(line) > 1:
+            if (line[0] == "SYSTEM") & (line[1] == "TEMPERATURE:"):
+                temperature = float(line[2])
+                if debug:
+                    print "\tSystem temperature: {} K".format(temperature)
+            elif line[0] == "END":
+                break
+
 # Define subset of data without solvent
 def parseWater():
     # select all atoms that are not water or hydrogen
@@ -279,11 +295,13 @@ def buildBlankDataSet(a, b):
     totForce = numpy.zeros(binCount)
     integF = numpy.zeros(binCount)
 
+    freeEnergy = numpy.zeros(binCount)
+    rdf = numpy.zeros(binCount)
     probDensity = numpy.zeros(binCount) # Probability density of data counts
     dataCounts = numpy.zeros(binCount)  # Keep track of the number of measurements made
                                         # in each bin, for averaging purposes
 
-    dataSet = [coul, lJ, totForce, integF, probDensity, dataCounts]
+    dataSet = [coul, lJ, totForce, integF, freeEnergy, rdf, probDensity, dataCounts]
     return dataSet
 
 # Performs a series of coordinate-related computations on one pair of particles for one time step and returns the data
@@ -333,7 +351,7 @@ def integrateForce():
                 # Integrate the force data array, store in integrated force data array
                 for tf in range(0, len(plots[index][2]) - 1):
                     tf = len(plots[index][2]) - 1 - tf
-                    sum += plots[index][2][tf]
+                    sum += plots[index][2][tf] * binSize
                     plots[index][3][tf] = sum
 
 # Perform post-datamining calculations
@@ -341,6 +359,8 @@ def postProcess():
     averageAll()
     integrateForce()
     distanceDistribution()
+    rdf()
+    freeEnergy()
     zeroToNan()
 
 # Converts all running sums to averages
@@ -377,9 +397,7 @@ def distanceDistribution():
 
     for set in range(0, lastSet):
         if set % 2 == 1:                            # set will reference all interaction pair datasets
-            mean = numpy.average(plots[set][countSubsetIndex])
-            std = numpy.std(plots[set][countSubsetIndex])
-            norm = (plots[set][countSubsetIndex] - mean) / std
+            norm = plots[set][countSubsetIndex]/numpy.sum(plots[set][countSubsetIndex])
             distribution = norm / binSize
             plots[set][probDistIndex] = distribution
 
@@ -478,6 +496,25 @@ def computeTotalForce(magR, a, b, fA, fB):
     MagAvgF = numpy.dot(avgForce, rHat)
     return MagAvgF
 
+# Determine radial distribution frequency data
+def rdf():
+    for set in range(0, len(plots)):
+        if set % 2 == 1:
+            for bin in range(0, binCount):
+                dens = plots[set][len(plots[set])-1][bin]
+                g = 4 * numpy.pi * numpy.power(bin, 2) * dens * binSize
+                plots[set][len(plots[set])-3][bin] = g
+
+# Compute Free Energy data from Radial Distribution Data
+def freeEnergy():
+    for set in range(0, len(plots)):
+        if set % 2 == 1:
+            for bin in range(0, binCount):
+                if plots[set][len(plots[set])-3][bin] != 0.0:
+                    log = numpy.log(plots[set][len(plots[set])-3][bin])         # Get probability and take log
+                    fe = -boltzmann * temperature * log          # Compute free energy
+                    plots[set][len(plots[set])-4][bin] = fe
+
 # Print debug info at example timestep
 def exampleTimestepDebug():
     global plots
@@ -499,11 +536,22 @@ def plotAllData(color='r'):
         if pair % 2 == 0:
             xAxis = numpy.arange(len(plots[pair+1][0])) * binSize
 
-            # Plot Coulombic Potential
-            f, (ax0, ax1, ax2, ax3, ax4, ax5) = plt.subplots(6, sharex=True)
+            # Create plots and labels
+            f, (ax2, ax3, ax4, ax5, ax6, ax7) = plt.subplots(6, sharex=True)
 
+            plt.xlabel("Intermolecular Distance (Angstroms)", fontsize=10)
+            plt.suptitle("{} Interactions".format(plots[pair]))
+
+            '''
+
+            # THIS CODE IS COMMENTED OUT SINCE THE PLOTS ARE GETTING CROWDED. I'M WORKING ON ADDING A FEATURE TO THE
+            # CONFIG FILE, ALLOWING THE USER TO PICK AND CHOOSE WHICH PLOTS TO SHOW
+
+
+            # Plot Coulombic Potential
             ax0.scatter(xAxis, plots[pair+1][0], c=color, s=15)
             ax0.plot(xAxis, plots[pair+1][0])
+            ax0.grid(True)
             ax0.set_title("Coulombic Potential")
             ax0.set_ylabel("Energy (kcal/mol)", fontsize=10)
             #coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
@@ -514,19 +562,21 @@ def plotAllData(color='r'):
             # Plot Lennard-Jones Potential
             ax1.scatter(xAxis, plots[pair+1][1], c=color, s=15)
             ax1.plot(xAxis, plots[pair+1][1])
+            ax1.grid(True)
             ax1.set_title("Lennard-Jones Potential")
             ax1.set_ylabel("Energy (kcal/mol)", fontsize=10)
             #coef1 = numpy.polyfit(xAxis, plots[pair+1][1], 5)
             #poly1 = numpy.poly1d(coef1)
             #ax1fit = poly1(xAxis)
             #ax1.plot(ax1fit)
-
+            '''
 
             # Plot Total Force
             ax2.scatter(xAxis, plots[pair+1][2], c=color, s=15)
             ax2.plot(xAxis, plots[pair+1][2])
+            ax2.grid(True)
             ax2.set_title("Total Force")
-            ax2.set_ylabel("Avg Force", fontsize=10)
+            ax2.set_ylabel("Avg Force", fontsize=14)
             #coef2 = numpy.polyfit(xAxis, plots[pair+1][2], 5)
             #poly2 = numpy.poly1d(coef2)
             #ax2fit = poly2(xAxis)
@@ -537,22 +587,35 @@ def plotAllData(color='r'):
             ax3.plot(xAxis, plots[pair+1][3])
             ax3.grid(True)
             ax3.set_title("Integrated Force")
-            ax3.set_ylabel("Potential", fontsize=10)
+            ax3.set_ylabel("Free Energy", fontsize=14)
 
             # Plot Distance Distribution
             ax4.scatter(xAxis, plots[pair+1][len(plots[pair+1])-1], c=color, s=15)
             ax4.plot(xAxis, plots[pair+1][len(plots[pair+1])-1])
+            ax4.grid(True)
             ax4.set_title("Frequency of Particle Distance")
-            ax4.set_ylabel("Occurrances")
-
-            plt.xlabel("Intermolecular Distance (Angstroms)", fontsize=10)
-            plt.suptitle("{} Interactions".format(plots[pair]))
+            ax4.set_ylabel("Occurrances", fontsize=14)
 
             # Plot Probability Distribution of Distance Frequency
             ax5.scatter(xAxis, plots[pair+1][len(plots[pair+1])-2], c=color, s=15)
             ax5.plot(xAxis, plots[pair+1][len(plots[pair+1])-2])
+            ax5.grid(True)
             ax5.set_title("Probability Density Distribution of Distance Frequency")
-            ax5.set_ylabel("Probability")
+            ax5.set_ylabel("Probability", fontsize=14)
+
+            # Plot Radial Distribution Frequency
+            ax6.scatter(xAxis, plots[pair+1][len(plots[pair+1])-3], c=color, s=15)
+            ax6.plot(xAxis, plots[pair+1][len(plots[pair+1])-3])
+            ax6.grid(True)
+            ax6.set_title("Radial Distribution Frequency")
+            ax6.set_ylabel("g(r)", fontsize=14)
+
+            # Plot Free Energy
+            ax7.scatter(xAxis, plots[pair+1][len(plots[pair+1])-4], c=color, s=15)
+            ax7.plot(xAxis, plots[pair+1][len(plots[pair+1])-4])
+            ax7.grid(True)
+            ax7.set_title("Free Energy")
+            ax7.set_ylabel("Free Energy \n(kcal/mol)")
 
     plt.show()
     '''
@@ -614,6 +677,9 @@ def main():
     # Define coordinate min/max and bin size
     getCoordBounds(configFile, pdb)
 
+    # Get temperature from config file
+    getTemp(configFile)
+
     # Initialize MD Analysis
     initMDA()
 
@@ -625,7 +691,7 @@ def main():
 
     end = time.time()
     t = end - start
-    print "Total running time: {} sec".format(t)
+    print "\nTotal running time: {} sec".format(t)
 
     # Generate figures and plots
     plotAllData()
