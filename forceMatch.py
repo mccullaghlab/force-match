@@ -34,6 +34,56 @@ exTs = 0            # example time step used for log purposes
 
 # PLOT DATA VARIABLE
 plots = []
+plotOrder = []
+
+titles = [
+    "Coulombic Potential",
+    "Lennard-Jones Potential",
+    "Total Force",
+    "Integrated Force",
+    "Frequency Distribution of Particle Distance",
+    "Probability Density Distribution of Distance Frequency",
+    "Radial Distribution Frequency",
+    "Free Energy"
+]
+
+yLabels = [
+    "Energy (kcal/mol)",
+    "Energy (kcal/mol)",
+    "Avg Force",
+    "Free Energy",
+    "Occurrances",
+    "Probability",
+    "g(r)",
+    "Free Energy \n(kcal/mol)"
+]
+
+
+'''
+    DATA ORGANIZATION:
+        Plots -- List of name / dataset pairs
+        Data -- Ordered list of data sets. Real-time data populates the front of the list,
+                while post-process data populates the end of the list.
+                Plots may be drawn in any order, but they are built and stored as follows:
+        Data set order:
+            [0] -- Coulombic Potential
+            [1] -- Lennard-Jones Potential
+            [2] -- Total Force
+
+            [-3] -- Free Energy
+            [-2] -- Radial Distribution Frequency
+            [-1] -- Frequency of Particle Distance
+
+            EX: Plots-  0       1       2       3       4       5
+                     SOD-SOD   Data  SOD-CLA   Data  CLA-CLA   Data
+                             [Coul]          [Coul]          [Coul]
+                             [LJ]            [LJ]            [LJ]
+                             [TF]            [TF]            [TF]
+                             [FE]            [FE]            [FE]
+                             [RDF]           [RDF]           [RDF]
+                             [Freq]          [Freq]          [Freq]
+
+'''
 
 
 
@@ -180,6 +230,32 @@ def getTemp(cF):
             elif line[0] == "END":
                 break
 
+# Define which plots to draw, and in which order
+def getPlotOrder(cF):
+    global plotOrder
+    txt = open(cF, 'r')
+    line = txt.next().split()
+    while len(line) == 0:
+        line = txt.next().split()
+    read = False
+    while line[0] != "END":
+        if (line[0] == "PLOTS") & (line[1] == "PLOT") & (line[2] == "ORDER"):   # Ignore config lines before plot order
+            read = True
+            line = txt.next().split()
+        if read:                        # Begin reading plot order section of config
+            count = int(line[-1:][0])   # Read user-defined number
+            plotOrder.append(count)
+            line = txt.next().split()
+            if len(line) == 0:
+                break
+        else:
+            line = txt.next().split()
+            while len(line) < 3:
+                line = txt.next().split()
+
+            if line[0] == "END":
+                break
+
 # Define subset of data without solvent
 def parseWater():
     # select all atoms that are not water or hydrogen
@@ -290,6 +366,7 @@ def findPair(a, b):
 
 # Builds a blank data set in which to accumulate data
 def buildBlankDataSet(a, b):
+
     coul = numpy.zeros(binCount)
     lJ = numpy.zeros(binCount)
     totForce = numpy.zeros(binCount)
@@ -306,14 +383,17 @@ def buildBlankDataSet(a, b):
 
 # Performs a series of coordinate-related computations on one pair of particles for one time step and returns the data
 def computeCoordData(a, b):
-    global plots
+    global plots, plotOrder
     magR = computeMagR(a, b)            # Determine distance between particles
     if rMin <= magR < rMax:             # If distance is within specified range
         binNo = int(magR / binSize)     #   determine the appropriate bin number
         dataSet = findPair(a, b)
         if binNo < binCount:
-            plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
-            plots[dataSet][1][binNo] += computeLJ(a, b, magR)
+            if plotOrder[0] > 0:        # If user chose to plot coulombic data, compute the data
+                plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
+            if plotOrder[1] > 0:        # if user chose to plot lennard-jones data, compute the data
+                plots[dataSet][1][binNo] += computeLJ(a, b, magR)
+
             plots[dataSet][len(plots[dataSet]) - 1][binNo] += 1     # Increase measurement count by 1
 
 # Takes atoms in coord file and returns corresponding atoms in force file
@@ -331,13 +411,15 @@ def findAtomsForce(a, b):
 # Performs a series of force computations on one pair of particles for one time step
 def computeForceData(a, b):
     global plots
-    magR = computeMagR(a, b)
-    if rMin <= magR < rMax:
-        binNo = int(magR / binSize)
-        if binNo < binCount:
-            dataSet = findPair(a, b)
-            forceAtoms = findAtomsForce(a, b)
-            plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
+
+    if (plotOrder[2] > 0) | (plotOrder[3] > 0):
+        magR = computeMagR(a, b)
+        if rMin <= magR < rMax:
+            binNo = int(magR / binSize)
+            if binNo < binCount:
+                dataSet = findPair(a, b)
+                forceAtoms = findAtomsForce(a, b)
+                plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
 
 # Integrates a set of force data for a given pair of atoms
 def integrateForce():
@@ -357,6 +439,7 @@ def integrateForce():
 # Perform post-datamining calculations
 def postProcess():
     averageAll()
+
     integrateForce()
     distanceDistribution()
     rdf()
@@ -500,10 +583,24 @@ def computeTotalForce(magR, a, b, fA, fB):
 def rdf():
     for set in range(0, len(plots)):
         if set % 2 == 1:
-            for bin in range(0, binCount):
-                dens = plots[set][len(plots[set])-1][bin]
-                g = 4 * numpy.pi * numpy.power(bin, 2) * dens * binSize
+            for bin in range(1, binCount):
+                rho = float((len(ionsCoord)/2)/(40e-10**3))     # pairs / volume
+                count = plots[set][len(plots[set])-1][bin]
+                pr = count / bin
+                g = pr / (rho * 4 * numpy.pi * binSize**2)
+                g /= (40e-10**3)
+                #dens = float(plots[set][len(plots[set])-1][bin])
+                #r2 = float((bin * binSize)**2)
+                #rho = float(1/(40e-10**3))     # number particles / box volume
+                #g = float(dens/(4 * numpy.pi * r2 * binSize * rho))
                 plots[set][len(plots[set])-3][bin] = g
+    print "Sample rdf value: {}".format(plots[set][len(plots[set])-3][40])
+
+    '''
+    radius = radius + deltaR
+    volume = 4 pi rad**2 deltaR
+
+    '''
 
 # Compute Free Energy data from Radial Distribution Data
 def freeEnergy():
@@ -511,8 +608,8 @@ def freeEnergy():
         if set % 2 == 1:
             for bin in range(0, binCount):
                 if plots[set][len(plots[set])-3][bin] != 0.0:
-                    log = numpy.log(plots[set][len(plots[set])-3][bin])         # Get probability and take log
-                    fe = -boltzmann * temperature * log          # Compute free energy
+                    logGr = numpy.log(plots[set][len(plots[set])-3][bin])         # Get probability and take log
+                    fe = -boltzmann * temperature * logGr          # Compute free energy
                     plots[set][len(plots[set])-4][bin] = fe
 
 # Print debug info at example timestep
@@ -535,119 +632,48 @@ def plotAllData(color='r'):
     for pair in range(0, len(plots)):
         if pair % 2 == 0:
             xAxis = numpy.arange(len(plots[pair+1][0])) * binSize
+            axes = []       # List of the requested plot order
+
+            for ax in range(1, len(plotOrder)):
+                # go through plotOrder and arrange these plots.
+                if ax in plotOrder:
+                    axes.append(plotOrder.index(ax))
 
             # Create plots and labels
-            f, (ax2, ax3, ax4, ax5, ax6, ax7) = plt.subplots(6, sharex=True)
+            if len(axes) == 0:
+                break
+            elif len(axes) > 1:       # Multiple plots
+                f, (yAxes) = plt.subplots(len(axes), sharex=True)
+
+                # Draw all requested plots
+                for i in range(0, len(axes)):
+                    yAxes[i].scatter(xAxis, plots[pair+1][axes[i]], c=color, s=15)
+                    yAxes[i].plot(xAxis, plots[pair+1][axes[i]])
+                    yAxes[i].grid(True)
+                    yAxes[i].set_title(titles[axes[i]])
+                    yAxes[i].set_ylabel(yLabels[axes[i]], fontsize=10)
+                    #coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
+                    #poly0 = numpy.poly1d(coef0)
+                    #ax0fit = poly0(xAxis)
+                    #ax0.plot(ax0fit)
+
+                plt.suptitle("{} Interactions".format(plots[pair]))
+
+            elif len(axes) == 1:           # Single plot
+                plt.scatter(xAxis, plots[pair+1][axes[0]], c=color, s=15)
+                plt.plot(xAxis, plots[pair+1][axes[0]])
+                plt.grid(True)
+                plt.suptitle("{} -- {} Interactions".format(titles[axes[0]], plots[pair]))
+                plt.ylabel(yLabels[axes[0]], fontsize=10)
 
             plt.xlabel("Intermolecular Distance (Angstroms)", fontsize=10)
-            plt.suptitle("{} Interactions".format(plots[pair]))
-
-            '''
-
-            # THIS CODE IS COMMENTED OUT SINCE THE PLOTS ARE GETTING CROWDED. I'M WORKING ON ADDING A FEATURE TO THE
-            # CONFIG FILE, ALLOWING THE USER TO PICK AND CHOOSE WHICH PLOTS TO SHOW
 
 
-            # Plot Coulombic Potential
-            ax0.scatter(xAxis, plots[pair+1][0], c=color, s=15)
-            ax0.plot(xAxis, plots[pair+1][0])
-            ax0.grid(True)
-            ax0.set_title("Coulombic Potential")
-            ax0.set_ylabel("Energy (kcal/mol)", fontsize=10)
-            #coef0 = numpy.polyfit(xAxis, plots[pair+1][0], 3)
-            #poly0 = numpy.poly1d(coef0)
-            #ax0fit = poly0(xAxis)
-            #ax0.plot(ax0fit)
 
-            # Plot Lennard-Jones Potential
-            ax1.scatter(xAxis, plots[pair+1][1], c=color, s=15)
-            ax1.plot(xAxis, plots[pair+1][1])
-            ax1.grid(True)
-            ax1.set_title("Lennard-Jones Potential")
-            ax1.set_ylabel("Energy (kcal/mol)", fontsize=10)
-            #coef1 = numpy.polyfit(xAxis, plots[pair+1][1], 5)
-            #poly1 = numpy.poly1d(coef1)
-            #ax1fit = poly1(xAxis)
-            #ax1.plot(ax1fit)
-            '''
 
-            # Plot Total Force
-            ax2.scatter(xAxis, plots[pair+1][2], c=color, s=15)
-            ax2.plot(xAxis, plots[pair+1][2])
-            ax2.grid(True)
-            ax2.set_title("Total Force")
-            ax2.set_ylabel("Avg Force", fontsize=14)
-            #coef2 = numpy.polyfit(xAxis, plots[pair+1][2], 5)
-            #poly2 = numpy.poly1d(coef2)
-            #ax2fit = poly2(xAxis)
-            #ax2.plot(ax2fit)
-
-            # Plot Integrated Force
-            ax3.scatter(xAxis, plots[pair+1][3], c=color, s=15)
-            ax3.plot(xAxis, plots[pair+1][3])
-            ax3.grid(True)
-            ax3.set_title("Integrated Force")
-            ax3.set_ylabel("Free Energy", fontsize=14)
-
-            # Plot Distance Distribution
-            ax4.scatter(xAxis, plots[pair+1][len(plots[pair+1])-1], c=color, s=15)
-            ax4.plot(xAxis, plots[pair+1][len(plots[pair+1])-1])
-            ax4.grid(True)
-            ax4.set_title("Frequency of Particle Distance")
-            ax4.set_ylabel("Occurrances", fontsize=14)
-
-            # Plot Probability Distribution of Distance Frequency
-            ax5.scatter(xAxis, plots[pair+1][len(plots[pair+1])-2], c=color, s=15)
-            ax5.plot(xAxis, plots[pair+1][len(plots[pair+1])-2])
-            ax5.grid(True)
-            ax5.set_title("Probability Density Distribution of Distance Frequency")
-            ax5.set_ylabel("Probability", fontsize=14)
-
-            # Plot Radial Distribution Frequency
-            ax6.scatter(xAxis, plots[pair+1][len(plots[pair+1])-3], c=color, s=15)
-            ax6.plot(xAxis, plots[pair+1][len(plots[pair+1])-3])
-            ax6.grid(True)
-            ax6.set_title("Radial Distribution Frequency")
-            ax6.set_ylabel("g(r)", fontsize=14)
-
-            # Plot Free Energy
-            ax7.scatter(xAxis, plots[pair+1][len(plots[pair+1])-4], c=color, s=15)
-            ax7.plot(xAxis, plots[pair+1][len(plots[pair+1])-4])
-            ax7.grid(True)
-            ax7.set_title("Free Energy")
-            ax7.set_ylabel("Free Energy \n(kcal/mol)")
 
     plt.show()
-    '''
-    # create figure with subplots
-    global numPlots
-    f, (ax0, ax1, ax2) = plt.subplots(numPlots, sharex=True)
-    f.suptitle("MD Analysis")
 
-    ax0.scatter(x0, y0, c=color, s=15)
-    ax0.set_title("Coulombic Potential Energy")
-    coef0 = numpy.polyfit(x0, y0, fitDegree)
-    poly0 = numpy.poly1d(coef0)
-    ys0 = poly0(x0)
-    ax0.plot(x0, ys0)
-
-    ax1.scatter(x1, y1, c=color, s=15)
-    ax1.set_title("Lennard-Jones Potential Energy")
-    coef1 = numpy.polyfit(x1, y1, fitDegree)
-    poly1 = numpy.poly1d(coef1)
-    ys1 = poly1(x1)
-    ax1.plot(x1, ys1)
-
-    ax2.scatter(x2, y2, c=color, s=15)
-    ax2.set_title("Total Force")
-    coef2 = numpy.polyfit(x2, y2, fitDegree)
-    poly2 = numpy.poly1d(coef2)
-    ys2 = poly2(x2)
-    ax2.plot(x2, ys2)
-
-    plt.xlabel("Intermolecular distance", fontsize=10)
-    plt.show()
-    '''
 
 # main program
 def main():
@@ -679,6 +705,9 @@ def main():
 
     # Get temperature from config file
     getTemp(configFile)
+
+    # Get plot order from config file
+    getPlotOrder(configFile)
 
     # Initialize MD Analysis
     initMDA()
