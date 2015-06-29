@@ -41,10 +41,10 @@ titles = [
     "Lennard-Jones Potential",
     "Total Force",
     "Integrated Force",
-    "Frequency Distribution of Particle Distance",
-    "Probability Density Distribution of Distance Frequency",
     "Radial Distribution Frequency",
-    "Free Energy"
+    "Free Energy",
+    "Probability Density Distribution of Distance Frequency",
+    "Frequency Distribution of Particle Distance"
 ]
 
 yLabels = [
@@ -52,10 +52,10 @@ yLabels = [
     "Energy (kcal/mol)",
     "Avg Force",
     "Free Energy",
-    "Occurrances",
-    "Probability",
     "g(r)",
-    "Free Energy \n(kcal/mol)"
+    "Free Energy \n(kcal/mol)",
+    "Probability",
+    "Occurrences"
 ]
 
 
@@ -66,12 +66,17 @@ yLabels = [
                 while post-process data populates the end of the list.
                 Plots may be drawn in any order, but they are built and stored as follows:
         Data set order:
+
+            (Active measurements:)
             [0] -- Coulombic Potential
             [1] -- Lennard-Jones Potential
             [2] -- Total Force
 
+            (Post-process measurements:)
+            [-5] -- Integrated Force
+            [-4] -- Radial Distribution Frequency
             [-3] -- Free Energy
-            [-2] -- Radial Distribution Frequency
+            [-2] -- Probability Density Distribution of Distance Frequency
             [-1] -- Frequency of Particle Distance
 
             EX: Plots-  0       1       2       3       4       5
@@ -79,8 +84,10 @@ yLabels = [
                              [Coul]          [Coul]          [Coul]
                              [LJ]            [LJ]            [LJ]
                              [TF]            [TF]            [TF]
-                             [FE]            [FE]            [FE]
+                             [IF]            [IF]            [IF]
                              [RDF]           [RDF]           [RDF]
+                             [FE]            [FE]            [FE]
+                             [Prob Dist]     [Prob Dist]     [Prob Dist]
                              [Freq]          [Freq]          [Freq]
 
 '''
@@ -390,10 +397,13 @@ def computeCoordData(a, b):
         dataSet = findPair(a, b)
         if binNo < binCount:
             if plotOrder[0] > 0:        # If user chose to plot coulombic data, compute the data
+                #print "Coulombic plot: plots[{}][0][{}]".format(dataSet, binNo)
                 plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
             if plotOrder[1] > 0:        # if user chose to plot lennard-jones data, compute the data
+                #print "LJ plot: plots[{}][1][{}]".format(dataSet, binNo)
                 plots[dataSet][1][binNo] += computeLJ(a, b, magR)
 
+            #print "Incrementing count: plots[{}][{}][{}]".format(dataSet, len(plots[dataSet])-1, binNo)
             plots[dataSet][len(plots[dataSet]) - 1][binNo] += 1     # Increase measurement count by 1
 
 # Takes atoms in coord file and returns corresponding atoms in force file
@@ -434,16 +444,22 @@ def integrateForce():
                 for tf in range(0, len(plots[index][2]) - 1):
                     tf = len(plots[index][2]) - 1 - tf
                     sum += plots[index][2][tf] * binSize
-                    plots[index][3][tf] = sum
+                    plots[index][len(plots[index])-5][tf] = sum
 
-# Perform post-datamining calculations
+# Perform post-data mining calculations
 def postProcess():
     averageAll()
 
-    integrateForce()
-    distanceDistribution()
-    rdf()
-    freeEnergy()
+    if plotOrder[len(plotOrder)-5] > 0:
+        integrateForce()
+    if (plotOrder[len(plotOrder)-4] > 0) | (plotOrder[len(plotOrder)-3] > 0):
+        rdf()
+    if plotOrder[len(plotOrder)-3] > 0:
+        freeEnergy()
+    if plotOrder[len(plotOrder)-2] > 0:
+        distanceDistribution()
+    # The last element in plotOrder is distance frequency, which is automatically populated
+
     zeroToNan()
 
 # Converts all running sums to averages
@@ -479,10 +495,10 @@ def distanceDistribution():
     probDistIndex = len(plots[1])-2                  # index of subset given for storing probability density data
 
     for set in range(0, lastSet):
-        if set % 2 == 1:                            # set will reference all interaction pair datasets
-            norm = plots[set][countSubsetIndex]/numpy.sum(plots[set][countSubsetIndex])
-            distribution = norm / binSize
-            plots[set][probDistIndex] = distribution
+        if set % 2 == 1:                             # set will reference all interaction pair datasets
+            n = plots[set][countSubsetIndex]/numpy.sum(plots[set][countSubsetIndex])
+            decimal = n / binSize
+            plots[set][probDistIndex] = decimal
 
 # Extract LJ parameters from param file
 def defineEpsilonSigma(paramFile):
@@ -594,7 +610,7 @@ def rdf():
                 #rho = float(1/(40e-10**3))     # number particles / box volume
                 #g = float(dens/(4 * numpy.pi * r2 * binSize * rho))
                 plots[set][len(plots[set])-3][bin] = g
-    print "Sample rdf value: {}".format(plots[set][len(plots[set])-3][40])
+                #print "RDF plot: plots[{}][{}][{}]".format(set, len(plots[set])-3, bin)
 
     '''
     radius = radius + deltaR
@@ -611,6 +627,7 @@ def freeEnergy():
                     logGr = numpy.log(plots[set][len(plots[set])-3][bin])         # Get probability and take log
                     fe = -boltzmann * temperature * logGr          # Compute free energy
                     plots[set][len(plots[set])-4][bin] = fe
+                    #print "Free Energy plot: plots[{}][{}][{}]".format(set, len(plots[set])-4, bin)
 
 # Print debug info at example timestep
 def exampleTimestepDebug():
@@ -634,16 +651,17 @@ def plotAllData(color='r'):
             xAxis = numpy.arange(len(plots[pair+1][0])) * binSize
             axes = []       # List of the requested plot order
 
-            for ax in range(1, len(plotOrder)):
+            for ax in range(1, len(plotOrder)+1):
                 # go through plotOrder and arrange these plots.
                 if ax in plotOrder:
                     axes.append(plotOrder.index(ax))
 
+
             # Create plots and labels
-            if len(axes) == 0:
+            if len(axes) == 0:        # If zero plots are requested, end the program
                 break
             elif len(axes) > 1:       # Multiple plots
-                f, (yAxes) = plt.subplots(len(axes), sharex=True)
+                f, yAxes = plt.subplots(len(axes), sharex=True)
 
                 # Draw all requested plots
                 for i in range(0, len(axes)):
@@ -668,12 +686,7 @@ def plotAllData(color='r'):
 
             plt.xlabel("Intermolecular Distance (Angstroms)", fontsize=10)
 
-
-
-
-
     plt.show()
-
 
 # main program
 def main():
