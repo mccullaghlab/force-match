@@ -16,6 +16,7 @@ param = None
 force = None
 coord = None
 temperature = None
+dims = None
 
 debug = False
 junkCounter = 0     # counter used for debugging
@@ -189,6 +190,7 @@ def getParam(cF):
 
 # Set coordinate max/min and binsize
 def getCoordBounds(cF, pdb):
+    global dims
     txt = open(cF,'r')
     txt2 = open(pdb, 'r')
     line = txt.next()
@@ -212,16 +214,6 @@ def getCoordBounds(cF, pdb):
         elif line[:length3] == "BIN SIZE: ":
             rem = -1 * (len(line) - length3)
             binSize = float(line[rem:-1])
-
-    binCount = int((rMax - rMin)/binSize)
-
-    if debug:
-        print "--Dimensions of System--"
-        print "\tTotal System Dimensions: {} A x {} A x {} A".format(dims[0], dims[1], dims[2])
-        print "\tMin Interparticle Distance Considered: {} A".format(rMin)
-        print "\tMax Interparticle Distance Considered: {} A".format(rMax)
-        print "\tBin Size Used: {}".format(binSize)
-        print "\tBin Count: {}".format(binCount)
 
 # Get temperature of system from config file
 def getTemp(cF):
@@ -275,13 +267,31 @@ def parseWater():
 
 # Initialize MD Analysis
 def initMDA():
-    # start MDAnalysis with a universal
-    # force universe
-    global force, coord, debug
+    # start MDAnalysis with a universal force universe
+    global force, coord, dims, rMax, binCount, debug
 
+    m = False       # Swtiched to True if user requests an rMax value greater than the system allows
     force = MDAnalysis.Universe(psf, forceDcd)
     # coordinate universe
     coord = MDAnalysis.Universe(psf, coordDcd)
+    dims = [coord.dimensions[0], coord.dimensions[1], coord.dimensions[2]]
+    rMaxLimit = numpy.sqrt((dims[0]**2) + (dims[1]**2) + (dims[2]**2))
+    if rMax > rMaxLimit:
+        rMax = rMaxLimit
+        m = True
+
+    binCount = int((rMax - rMin)/binSize)
+
+    if debug:
+        print "--Dimensions of System--"
+        print "\tTotal System Dimensions: {} A x {} A x {} A".format(dims[0], dims[1], dims[2])
+        print "\tMin Interparticle Distance Considered: {} A".format(rMin)
+        if m:
+            print "\tMax Interparticle Distance Considered: {} A\tThe requested rMax value was bigger than the simulation box size permits, and was truncated".format(rMax)
+        else:
+            print "\tMax Interparticle Distance Considered: {} A".format(rMax)
+        print "\tBin Size Used: {}".format(binSize)
+        print "\tBin Count: {}".format(binCount)
 
     # Truncate solvent out of the data
     parseWater()
@@ -595,39 +605,41 @@ def computeTotalForce(magR, a, b, fA, fB):
     MagAvgF = numpy.dot(avgForce, rHat)
     return MagAvgF
 
+'''
+    RDF function should approach 1 as r >> 0.
+    Currently, it appraches 0 as r >> 0.
+
+'''
 # Determine radial distribution frequency data
 def rdf():
     for set in range(0, len(plots)):
         if set % 2 == 1:
             for bin in range(1, binCount):
-                rho = float((len(ionsCoord)/2)/(40e-10**3))     # pairs / volume
-                count = plots[set][len(plots[set])-1][bin]
-                pr = count / bin
-                g = pr / (rho * 4 * numpy.pi * binSize**2)
-                g /= (40e-10**3)
-                #dens = float(plots[set][len(plots[set])-1][bin])
-                #r2 = float((bin * binSize)**2)
-                #rho = float(1/(40e-10**3))     # number particles / box volume
-                #g = float(dens/(4 * numpy.pi * r2 * binSize * rho))
-                plots[set][len(plots[set])-3][bin] = g
-                #print "RDF plot: plots[{}][{}][{}]".format(set, len(plots[set])-3, bin)
+                radius = bin*binSize
+                deltaR = binSize
 
-    '''
-    radius = radius + deltaR
-    volume = 4 pi rad**2 deltaR
+                volume = 4 * numpy.pi * radius**2 * deltaR
 
-    '''
+                N = float(len(plots)/2)
+                V = float(dims[0]) * float(dims[1]) * float(dims[2])
+                rho = float(N/V)
+
+                Pr = plots[set][len(plots[set])-1][bin]/numpy.sum(plots[set][len(plots[set])-1])     # counts(r) / r
+                #g = Pr / (volume/V)
+                hr = plots[set][len(plots[set])-1][bin]
+                g = hr / (volume * rho * len(coord.trajectory))
+                plots[set][len(plots[set])-4][bin] = g
 
 # Compute Free Energy data from Radial Distribution Data
 def freeEnergy():
     for set in range(0, len(plots)):
         if set % 2 == 1:
             for bin in range(0, binCount):
-                if plots[set][len(plots[set])-3][bin] != 0.0:
-                    logGr = numpy.log(plots[set][len(plots[set])-3][bin])         # Get probability and take log
+                rdf = plots[set][len(plots[set])-4][bin]
+                if rdf != 0.0:
+                    logGr = numpy.log(rdf)         # Get probability and take log
                     fe = -boltzmann * temperature * logGr          # Compute free energy
-                    plots[set][len(plots[set])-4][bin] = fe
-                    #print "Free Energy plot: plots[{}][{}][{}]".format(set, len(plots[set])-4, bin)
+                    plots[set][len(plots[set])-3][bin] = fe
 
 # Print debug info at example timestep
 def exampleTimestepDebug():
