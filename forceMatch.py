@@ -605,30 +605,23 @@ def computeTotalForce(magR, a, b, fA, fB):
     MagAvgF = numpy.dot(avgForce, rHat)
     return MagAvgF
 
-'''
-    RDF function should approach 1 as r >> 0.
-    Currently, it appraches 0 as r >> 0.
-
-'''
 # Determine radial distribution frequency data
 def rdf():
     for set in range(0, len(plots)):
         if set % 2 == 1:
             for bin in range(1, binCount):
+
                 radius = bin*binSize
                 deltaR = binSize
-
                 volume = 4 * numpy.pi * radius**2 * deltaR
 
-                N = float(len(plots)/2)
-                V = float(dims[0]) * float(dims[1]) * float(dims[2])
-                rho = float(N/V)
+                N = float(len(plots)/2)                                     # Number of unique pair types
+                V = float(dims[0]) * float(dims[1]) * float(dims[2])        # Box dimensions given in DCD
+                rho = float(N/V)                                            # Avg particle density
 
-                Pr = plots[set][len(plots[set])-1][bin]/numpy.sum(plots[set][len(plots[set])-1])     # counts(r) / r
-                #g = Pr / (volume/V)
-                hr = plots[set][len(plots[set])-1][bin]
-                g = hr / (volume * rho * len(coord.trajectory))
-                plots[set][len(plots[set])-4][bin] = g
+                hr = plots[set][len(plots[set])-1][bin]                     # Occurrences at distance r
+                g = hr / (volume * rho * len(coord.trajectory))             # g(r)
+                plots[set][len(plots[set])-4][bin] = g                      # Send computed value to dataset
 
 # Compute Free Energy data from Radial Distribution Data
 def freeEnergy():
@@ -639,7 +632,7 @@ def freeEnergy():
                 if rdf != 0.0:
                     logGr = numpy.log(rdf)         # Get probability and take log
                     fe = -boltzmann * temperature * logGr          # Compute free energy
-                    plots[set][len(plots[set])-3][bin] = fe
+                    plots[set][len(plots[set])-3][bin] = fe        # Send computed value to data set    `
 
 # Print debug info at example timestep
 def exampleTimestepDebug():
