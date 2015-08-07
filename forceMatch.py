@@ -17,8 +17,15 @@ force = None
 coord = None
 temperature = None
 dims = None
+groups = None
+groupsCoord = None
+groupsForce = None
+ionsCoord = None
+ionsForce = None
 
 debug = False
+grouping = False
+groupingByResid = False
 junkCounter = 0     # counter used for debugging
 
 
@@ -92,6 +99,14 @@ yLabels = [
                              [Freq]          [Freq]          [Freq]
 
 '''
+
+
+# Atom data structure used in grouping many atoms into one point
+class AtomBasic:
+    name = None
+    mass = 0
+    position = [0, 0, 0]
+    charge = 0.0
 
 
 
@@ -229,6 +244,72 @@ def getTemp(cF):
             elif line[0] == "END":
                 break
 
+# Populate groups[] with atom groupings in config file
+def getGroups(cF):
+    global groups, grouping, groupingByResid
+    txt = open(cF, 'r')
+    if debug:
+        print "Extracting grouping settings from config file."
+    while groups is None:
+        line = txt.next().split()
+        if ("END" in line):
+                break
+        elif len(line) > 3:
+            if (line[0] == "GIVE") & (line[1] == "ATOM") & (line[2] == "GROUPS:") & (line[3] == "ENABLED"):
+                grouping = True
+                line = txt.next().split()
+                groups = []
+                while len(line) > 0:
+                    group = []
+                    for word in line:
+                        # skip index number on each line
+                        if ")" not in word:
+                            # if values given are a range, add all included values
+                            if "-" in word:
+                                w = word.split("-")
+                                w[1] = w[1].split(",")
+                                begin = int(w[0])
+                                end = int(w[1][0])
+                                for i in range(begin, end + 1):
+                                    group.append(i)
+                            # if value given has a comma on the end, remove it and
+                            # append the value to the group
+                            elif "," in word:
+                                w = word.split(",")
+                                atom = int(w[0])
+                                group.append(atom)
+                            # append value to group
+                            else:
+                                group.append(int(word))
+                    groups.append(group)
+                    line = txt.next().split()
+        elif len(line) > 3:
+            if (line[0] == "GROUP") & (line[1] == "BY") & (line[2] == "RESID:") & (line[3] == "ENABLED"):
+                groupingByResid = True
+                line = txt.next().split()
+                groups = [line[3]]              # Set size of [groups] equal to config "Num of residues"
+
+# Use groups[] to reduce raw ionsCoord and raw ionsForce to single sites
+def groupToSingleSite():
+    global groups, groupsCoord, groupsForce, ionsCoord, ionsForce
+
+    if grouping:
+        if debug:
+            print "Grouping is ENABLED. Consolidating atom groups into single sites...\n"
+        groupsCoord = []
+        groupsForce = []
+
+        for group in groups:
+            groupsCoord.append(coord.atoms[group])
+            groupsForce.append(force.atoms[group])
+    elif groupingByResid:
+        if debug:
+            print "Grouping by Residue is ENABLED. Consolidating residues into single sites...\n"
+            for element in range(0, len(groups)):
+                print ""
+    elif debug:
+        print "Grouping is DISABLED. Atom groups are not consolidated into single sites.\n"
+
 # Define which plots to draw, and in which order
 def getPlotOrder(cF):
     global plotOrder
@@ -323,6 +404,8 @@ def printLogData(d):
         else:
             print("Coord and Force time step counts DO NOT MATCH\nCheck .config file for incorrect .dcd or .force.dcd file names.")
 
+
+
 # Iterate through all pairs of particles in all simulations,
 #    identifying each pair of particles, performing computations,
 #    and storing the results in a data set
@@ -335,8 +418,8 @@ def iterate():
             for b in ionsCoord:                 # Second particle
                 if a.number != b.number:        # Ensure particles don't have same index
                     if ts.frame == 1:               # Determine particle pairs
-                        if debug:
-                            print "  Identified a {}-{} pair.".format(a.name, b.name)
+                        #if debug:
+                            #print "  Identified a {}-{} pair.".format(a.name, b.name)
                         if pairIsUnique(a, b):
                                 plots.append("{} {}".format(a.name, b.name))
                                 plots.append(buildBlankDataSet(a, b))
@@ -360,16 +443,16 @@ def pairIsUnique(a, b):
     pair = "{} {}".format(a.name, b.name)
     pairFlipped = "{} {}".format(b.name, a.name)
     if pair in plots:
-        if debug:
-            print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
+        #if debug:
+            #print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
         return False
     elif pairFlipped in plots:
-        if debug:
-            print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
+        #if debug:
+            #print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
         return False
     else:
-        if debug:
-            print "\tBuilding new data set for all {}-{} pairs. Including new measurements.".format(a.name, b.name)
+        #if debug:
+            #print "\tBuilding new data set for all {}-{} pairs. Including new measurements.".format(a.name, b.name)
         return True
 
 # Returns the index of the data set of a given pair of atoms, assuming it exists in the plots array
@@ -646,6 +729,27 @@ def exampleTimestepDebug():
                 print "\t{}".format(plots[i])
         print "\n\tThis process takes some time, please wait."
 
+# Return center of mass of a group of atoms
+def getGroupCOM(group):
+    sumOfMasses = 0
+    sumProdcuts = 0
+    for number in group:
+        mi = ionsCoord[number - 1].mass
+        ri = ionsCoord[number - 1].position
+        sumOfMasses += mi
+        sumProdcuts += (mi * ri)
+    return ((1/sumOfMasses) * sumProdcuts)
+
+def getGroupCharge(group):
+    pointCharge = 0
+    count = 0
+    for number in group:
+        pointCharge += ionsCoord[number - 1].charge
+        count += 1
+    pointCharge /= count
+    return pointCharge
+
+
 # Draw subplots for each data set
 def plotAllData(color='r'):
     global plots
@@ -727,8 +831,14 @@ def main():
     # Get plot order from config file
     getPlotOrder(configFile)
 
+    # Get user-defined atom groups
+    getGroups(configFile)
+
     # Initialize MD Analysis
     initMDA()
+
+    # Consolidate atom groups into single sites
+    groupToSingleSite()
 
     # Define epsilon and sigma values for particles of interest
     defineEpsilonSigma(param)
