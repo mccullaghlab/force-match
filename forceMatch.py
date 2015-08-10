@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy
 import MDAnalysis
 import time
+import math
 
 
 # FILE VARIABLES
@@ -288,6 +289,7 @@ def initMDA():
 
     # Truncate solvent out of the data
     parseWater()
+
 
     # Print log data
     printLogData(debug)
@@ -720,7 +722,7 @@ def plotAllData(color='r'):
 
     plt.show()
 
-def giveOutFile(outFile):
+def giveOutFiles(outFile):
     top = True
     for p in range(len(plots)):
         if p % 2 == 0:
@@ -732,17 +734,21 @@ def giveOutFile(outFile):
             outFile2Name = "".join(outFile2Name)
             outFile2 = open("{}.dat".format(outFile2Name), 'w')
         else:
+            count = 1
             for d in range(binCount):
-                outFile.write("\t{}\t\t{}\t\t{}\t\t{}\n".format(d, (binSize * d), plots[p][3][d], plots[p][2][d]))
-                for s in range(len(plots[p])):
-                    if top:
-                        outFile2.write("#")
-                        for s2 in range(len(plots[p])):
-                            outFile2.write("\t\t\t\t{}".format(shortTitles[s2]))
-                        outFile2.write("\n")
-                        top = False
-                    outFile2.write("\t\t\t\t{}".format(plots[p][s][d]))
-                outFile2.write("\n")
+                if not (math.isnan(plots[p][3][d])):
+                    pmf = "{0:.06f}".format(float(plots[p][3][d]))
+                    mf = "{0:.06f}".format(float(plots[p][2][d]))
+                    outFile.write("\t{}\t\t{}\t\t{}\t\t{}\n".format(count, (binSize * d), pmf, mf))
+                    count += 1
+                    for s in range(len(plots[p])):
+                        if top:
+                            outFile2.write("#\t\t{}\t\t\t\t{}\t\t\t\t{}\t\t\t\t{}\t\t\t\t{}\t\t\t\t{}\t\t\t\t{}\t\t\t{}\n{}".format(shortTitles[0], shortTitles[1], shortTitles[2], shortTitles[3], shortTitles[4], shortTitles[5], shortTitles[6], shortTitles[7], d * binSize))
+                            top = False
+                        field = "{0:.6f}".format(float(plots[p][s][d]))
+                        outFile2.write("\t\t{}".format(field))
+                    if ((d+1) * binSize) < rMax:
+                        outFile2.write("\n{}".format((d+1) * binSize))
 
     outFile.close()
 
@@ -759,9 +765,6 @@ def main():
 
     # Get name of PSF file from config file
     getPsf(configFile)
-
-    # Get name of PDB file from config file
-    #getPdb(configFile)
 
     # Get names of Force DCD files from config file
     getForceDCDs(configFile)
@@ -796,7 +799,7 @@ def main():
 
     # Make output file
     outFile = open(outFileName, 'w')
-    giveOutFile(outFile)
+    giveOutFiles(outFile)
 
     # Generate figures and plots
     plotAllData()
