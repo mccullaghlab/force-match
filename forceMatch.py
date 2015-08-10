@@ -9,7 +9,6 @@ import time
 # FILE VARIABLES
 configFile = 'forcematchFiles.config'
 psf = None
-pdb = None
 forceDcd = None
 coordDcd = None
 param = None
@@ -17,16 +16,10 @@ force = None
 coord = None
 temperature = None
 dims = None
-groups = None
-groupsCoord = None
-groupsForce = None
-ionsCoord = None
-ionsForce = None
 
 debug = False
-grouping = False
-groupingByResid = False
 junkCounter = 0     # counter used for debugging
+outFileName = "forceMatch_out.dat"
 
 
 # DEFUALT GLOBAL VARIABLES
@@ -36,9 +29,11 @@ binSize = 0.1
 binCount = 0
 elecPermittivity = 8.854e-12      # electrical permittivity of vacuum C^2/Jm
 boltzmann = 1.9872041e-3          # boltzmann constant in kcal/(K mol)
+rho = 0
 epsilon = []        # list of epsilon values for all non-solvent atoms
 lj_rMin = []          # list of rMin values for all non-solvent atoms
 exTs = 0            # example time step used for log purposes
+
 
 # PLOT DATA VARIABLE
 plots = []
@@ -47,19 +42,30 @@ plotOrder = []
 titles = [
     "Coulombic Potential",
     "Lennard-Jones Potential",
-    "Total Force",
-    "Integrated Force",
+    "Mean Force",
+    "Potential of Mean Force",
     "Radial Distribution Frequency",
     "Free Energy",
     "Probability Density Distribution of Distance Frequency",
     "Frequency Distribution of Particle Distance"
 ]
 
+shortTitles = [
+    "CP",
+    "LJ",
+    "MF",
+    "PMF",
+    "RDF",
+    "FE",
+    "PROB",
+    "FREQ"
+]
+
 yLabels = [
     "Energy (kcal/mol)",
     "Energy (kcal/mol)",
     "Avg Force",
-    "Free Energy",
+    "Free Energy \n(kcal/mol)",
     "g(r)",
     "Free Energy \n(kcal/mol)",
     "Probability",
@@ -74,39 +80,27 @@ yLabels = [
                 while post-process data populates the end of the list.
                 Plots may be drawn in any order, but they are built and stored as follows:
         Data set order:
-
             (Active measurements:)
             [0] -- Coulombic Potential
             [1] -- Lennard-Jones Potential
-            [2] -- Total Force
-
+            [2] -- Mean Force
             (Post-process measurements:)
-            [-5] -- Integrated Force
+            [-5] -- Potential of Mean Force
             [-4] -- Radial Distribution Frequency
             [-3] -- Free Energy
             [-2] -- Probability Density Distribution of Distance Frequency
             [-1] -- Frequency of Particle Distance
-
             EX: Plots-  0       1       2       3       4       5
                      SOD-SOD   Data  SOD-CLA   Data  CLA-CLA   Data
                              [Coul]          [Coul]          [Coul]
                              [LJ]            [LJ]            [LJ]
-                             [TF]            [TF]            [TF]
-                             [IF]            [IF]            [IF]
+                             [MF]            [MF]            [MF]
+                             [PMF]           [PMF]           [PMF]
                              [RDF]           [RDF]           [RDF]
                              [FE]            [FE]            [FE]
                              [Prob Dist]     [Prob Dist]     [Prob Dist]
                              [Freq]          [Freq]          [Freq]
-
 '''
-
-
-# Atom data structure used in grouping many atoms into one point
-class AtomBasic:
-    name = None
-    mass = 0
-    position = [0, 0, 0]
-    charge = 0.0
 
 
 
@@ -138,19 +132,6 @@ def getPsf(cF):
         elif line == 'END CONFIG FILE\n':
             print('No PSF file found in config.')
             break
-
-# Get name of PDB file from config file
-def getPdb(cF):
-    global pdb
-    txt = open(cF, 'r')
-    while pdb is None:
-        line = txt.next()
-        if line == 'PDB FILE:\n':
-            pdb = txt.next()[:-1]
-            if debug:
-                print("PDB File: {}".format(pdb))
-            elif line == 'END CONFIG FILE\n':
-                break
 
 # Get name of Force DCD files from config file
 def getForceDCDs(cF):
@@ -204,13 +185,10 @@ def getParam(cF):
                 print('Parameter file: {}\n'.format(param))
 
 # Set coordinate max/min and binsize
-def getCoordBounds(cF, pdb):
+def getCoordBounds(cF):
     global dims
     txt = open(cF,'r')
-    txt2 = open(pdb, 'r')
     line = txt.next()
-    dims = txt2.next().split()
-    dims = dims[1], dims[2], dims[3]
     length1 = len("MIN DISTANCE: ")
     length2 = len("MAX DISTANCE: ")
     length3 = len("BIN SIZE: ")
@@ -243,72 +221,6 @@ def getTemp(cF):
                     print "\tSystem temperature: {} K".format(temperature)
             elif line[0] == "END":
                 break
-
-# Populate groups[] with atom groupings in config file
-def getGroups(cF):
-    global groups, grouping, groupingByResid
-    txt = open(cF, 'r')
-    if debug:
-        print "Extracting grouping settings from config file."
-    while groups is None:
-        line = txt.next().split()
-        if ("END" in line):
-                break
-        elif len(line) > 3:
-            if (line[0] == "GIVE") & (line[1] == "ATOM") & (line[2] == "GROUPS:") & (line[3] == "ENABLED"):
-                grouping = True
-                line = txt.next().split()
-                groups = []
-                while len(line) > 0:
-                    group = []
-                    for word in line:
-                        # skip index number on each line
-                        if ")" not in word:
-                            # if values given are a range, add all included values
-                            if "-" in word:
-                                w = word.split("-")
-                                w[1] = w[1].split(",")
-                                begin = int(w[0])
-                                end = int(w[1][0])
-                                for i in range(begin, end + 1):
-                                    group.append(i)
-                            # if value given has a comma on the end, remove it and
-                            # append the value to the group
-                            elif "," in word:
-                                w = word.split(",")
-                                atom = int(w[0])
-                                group.append(atom)
-                            # append value to group
-                            else:
-                                group.append(int(word))
-                    groups.append(group)
-                    line = txt.next().split()
-        elif len(line) > 3:
-            if (line[0] == "GROUP") & (line[1] == "BY") & (line[2] == "RESID:") & (line[3] == "ENABLED"):
-                groupingByResid = True
-                line = txt.next().split()
-                groups = [line[3]]              # Set size of [groups] equal to config "Num of residues"
-
-# Use groups[] to reduce raw ionsCoord and raw ionsForce to single sites
-def groupToSingleSite():
-    global groups, groupsCoord, groupsForce, ionsCoord, ionsForce
-
-    if grouping:
-        if debug:
-            print "Grouping is ENABLED. Consolidating atom groups into single sites...\n"
-        groupsCoord = []
-        groupsForce = []
-
-        for group in groups:
-            groupsCoord.append(coord.atoms[group])
-            groupsForce.append(force.atoms[group])
-    elif groupingByResid:
-        if debug:
-            print "Grouping by Residue is ENABLED. Consolidating residues into single sites...\n"
-            for element in range(0, len(groups)):
-                print ""
-    elif debug:
-        print "Grouping is DISABLED. Atom groups are not consolidated into single sites.\n"
 
 # Define which plots to draw, and in which order
 def getPlotOrder(cF):
@@ -404,8 +316,6 @@ def printLogData(d):
         else:
             print("Coord and Force time step counts DO NOT MATCH\nCheck .config file for incorrect .dcd or .force.dcd file names.")
 
-
-
 # Iterate through all pairs of particles in all simulations,
 #    identifying each pair of particles, performing computations,
 #    and storing the results in a data set
@@ -414,12 +324,13 @@ def iterate():
     if debug:
         print "-- Iterating through all particle pairs in first time step to establish pair types"
     for ts in coord.trajectory:                 # Iterate through all time steps
+        tsf = force.trajectory[ts.frame-1]
         for a in ionsCoord:                     # First particle
             for b in ionsCoord:                 # Second particle
-                if a.number != b.number:        # Ensure particles don't have same index
+                if a.number < b.number:        # Ensure particles don't have same index
                     if ts.frame == 1:               # Determine particle pairs
-                        #if debug:
-                            #print "  Identified a {}-{} pair.".format(a.name, b.name)
+                        if debug:
+                            print "  Identified a {}-{} pair.".format(a.name, b.name)
                         if pairIsUnique(a, b):
                                 plots.append("{} {}".format(a.name, b.name))
                                 plots.append(buildBlankDataSet(a, b))
@@ -443,16 +354,16 @@ def pairIsUnique(a, b):
     pair = "{} {}".format(a.name, b.name)
     pairFlipped = "{} {}".format(b.name, a.name)
     if pair in plots:
-        #if debug:
-            #print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
+        if debug:
+            print "\t{}-{} data set found, submitting new measurements.".format(a.name, b.name)
         return False
     elif pairFlipped in plots:
-        #if debug:
-            #print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
+        if debug:
+            print "\t{}-{} data set found, submitting new measurements.".format(b.name, a.name)
         return False
     else:
-        #if debug:
-            #print "\tBuilding new data set for all {}-{} pairs. Including new measurements.".format(a.name, b.name)
+        if debug:
+            print "\tBuilding new data set for all {}-{} pairs. Including new measurements.".format(a.name, b.name)
         return True
 
 # Returns the index of the data set of a given pair of atoms, assuming it exists in the plots array
@@ -483,20 +394,15 @@ def buildBlankDataSet(a, b):
 
 # Performs a series of coordinate-related computations on one pair of particles for one time step and returns the data
 def computeCoordData(a, b):
-    global plots, plotOrder
-    magR = computeMagR(a, b)            # Determine distance between particles
+    global plots
+    magR = computeMagR(a, b)[0]            # Determine distance between particles
     if rMin <= magR < rMax:             # If distance is within specified range
         binNo = int(magR / binSize)     #   determine the appropriate bin number
         dataSet = findPair(a, b)
         if binNo < binCount:
-            if plotOrder[0] > 0:        # If user chose to plot coulombic data, compute the data
-                #print "Coulombic plot: plots[{}][0][{}]".format(dataSet, binNo)
-                plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
-            if plotOrder[1] > 0:        # if user chose to plot lennard-jones data, compute the data
-                #print "LJ plot: plots[{}][1][{}]".format(dataSet, binNo)
-                plots[dataSet][1][binNo] += computeLJ(a, b, magR)
+            plots[dataSet][0][binNo] += computeCoulombic(a, b, magR)
+            plots[dataSet][1][binNo] += computeLJ(a, b, magR)
 
-            #print "Incrementing count: plots[{}][{}][{}]".format(dataSet, len(plots[dataSet])-1, binNo)
             plots[dataSet][len(plots[dataSet]) - 1][binNo] += 1     # Increase measurement count by 1
 
 # Takes atoms in coord file and returns corresponding atoms in force file
@@ -515,14 +421,13 @@ def findAtomsForce(a, b):
 def computeForceData(a, b):
     global plots
 
-    if (plotOrder[2] > 0) | (plotOrder[3] > 0):
-        magR = computeMagR(a, b)
-        if rMin <= magR < rMax:
-            binNo = int(magR / binSize)
-            if binNo < binCount:
-                dataSet = findPair(a, b)
-                forceAtoms = findAtomsForce(a, b)
-                plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
+    magR = computeMagR(a, b)[0]
+    if rMin <= magR < rMax:
+        binNo = int(magR / binSize)
+        if binNo < binCount:
+            dataSet = findPair(a, b)
+            forceAtoms = findAtomsForce(a, b)
+            plots[dataSet][2][binNo] += computeTotalForce(magR, a, b, forceAtoms[0], forceAtoms[1])
 
 # Integrates a set of force data for a given pair of atoms
 def integrateForce():
@@ -531,28 +436,21 @@ def integrateForce():
         for b in ionsCoord:
             if a.number != b.number:
                 index = findPair(a, b)
-                sum = 0
+                sum = plots[index][len(plots[index])-3][-1]   # set initial point equal to free energy at max r
 
                 # Integrate the force data array, store in integrated force data array
-                for tf in range(0, len(plots[index][2]) - 1):
-                    tf = len(plots[index][2]) - 1 - tf
+                for tf in range(0, (len(plots[index][2])/1) - 1):
+                    tf = (len(plots[index][2])/1) - 1 - tf
                     sum += plots[index][2][tf] * binSize
                     plots[index][len(plots[index])-5][tf] = sum
 
 # Perform post-data mining calculations
 def postProcess():
     averageAll()
-
-    if plotOrder[len(plotOrder)-5] > 0:
-        integrateForce()
-    if (plotOrder[len(plotOrder)-4] > 0) | (plotOrder[len(plotOrder)-3] > 0):
-        rdf()
-    if plotOrder[len(plotOrder)-3] > 0:
-        freeEnergy()
-    if plotOrder[len(plotOrder)-2] > 0:
-        distanceDistribution()
-    # The last element in plotOrder is distance frequency, which is automatically populated
-
+    rdf()
+    freeEnergy()
+    integrateForce()
+    distanceDistribution()
     zeroToNan()
 
 # Converts all running sums to averages
@@ -615,12 +513,25 @@ def defineEpsilonSigma(paramFile):
             line = txt.next().split()
     if debug:
         print "\n"
-
+'''
 # Use coord dcd file to determine magnitude of distance R between two particles
 def computeMagR(a, b):
     global magR
     r = a.position - b.position
     return numpy.linalg.norm(r)
+'''
+def computeMagR(a, b):
+    global dims
+    r = [0, 0, 0]
+    for i in range(3):
+        temp = a.position[i] - b.position[i]
+        if temp < (-dims[i])/2:
+            temp += dims[i]
+        elif temp > (dims[i]/2):
+            temp -= dims[i]
+        r[i] = temp
+    return numpy.linalg.norm(r), r
+
 
 # Use coord dcd file to determine coulombic potential of an atom in eV
 def computeCoulombic(a, b, magR):
@@ -681,7 +592,7 @@ def computeTotalForce(magR, a, b, fA, fB):
     forceA = fA.position
     forceB = fB.position
 
-    r = a.position - b.position
+    r = computeMagR(a, b)[1]
     rHat = r / magR
 
     avgForce = (forceA - forceB) / 2
@@ -690,6 +601,7 @@ def computeTotalForce(magR, a, b, fA, fB):
 
 # Determine radial distribution frequency data
 def rdf():
+    global rho
     for set in range(0, len(plots)):
         if set % 2 == 1:
             for bin in range(1, binCount):
@@ -698,13 +610,32 @@ def rdf():
                 deltaR = binSize
                 volume = 4 * numpy.pi * radius**2 * deltaR
 
-                N = float(len(plots)/2)                                     # Number of unique pair types
-                V = float(dims[0]) * float(dims[1]) * float(dims[2])        # Box dimensions given in DCD
-                rho = float(N/V)                                            # Avg particle density
+                rho = getRho()
 
                 hr = plots[set][len(plots[set])-1][bin]                     # Occurrences at distance r
                 g = hr / (volume * rho * len(coord.trajectory))             # g(r)
                 plots[set][len(plots[set])-4][bin] = g                      # Send computed value to dataset
+
+def getRho():
+    ions = []
+    for ion in ionsCoord:
+        if ion.name not in ions:
+            count = 1
+            ions.append(ion.name)
+            ions.append(count)
+        else:
+            for i in range(len(ions)):
+                if ion.name == ions[i]:
+                    ions[i + 1] += 1
+    N = 1
+    for e in range(len(ions)):
+        if e % 2 == 1:
+            N *= ions[e]
+
+    V = float(dims[0]) * float(dims[1]) * float(dims[2])
+
+    rho = N / V
+    return rho
 
 # Compute Free Energy data from Radial Distribution Data
 def freeEnergy():
@@ -724,31 +655,21 @@ def exampleTimestepDebug():
         print "\n-- Sample of Data"
         print "  Time Step: {}".format(exTs)
         print "  Collecting data on {} unique paring(s) of particles:".format(len(plots)/2)
-        for i in range (0, len(plots)):
+        for i in range(0, len(plots)):
             if i % 2 == 0:
                 print "\t{}".format(plots[i])
         print "\n\tThis process takes some time, please wait."
 
-# Return center of mass of a group of atoms
-def getGroupCOM(group):
-    sumOfMasses = 0
-    sumProdcuts = 0
-    for number in group:
-        mi = ionsCoord[number - 1].mass
-        ri = ionsCoord[number - 1].position
-        sumOfMasses += mi
-        sumProdcuts += (mi * ri)
-    return ((1/sumOfMasses) * sumProdcuts)
-
-def getGroupCharge(group):
-    pointCharge = 0
+def vmdData():
+    gofr = open("gofr.dat", 'r')
+    data = []
     count = 0
-    for number in group:
-        pointCharge += ionsCoord[number - 1].charge
+    for line in gofr:
         count += 1
-    pointCharge /= count
-    return pointCharge
-
+        line = line.split()
+        if count % 10 == 0:
+            data.append(float(line[1]))
+    return data
 
 # Draw subplots for each data set
 def plotAllData(color='r'):
@@ -773,9 +694,11 @@ def plotAllData(color='r'):
                 f, yAxes = plt.subplots(len(axes), sharex=True)
 
                 # Draw all requested plots
+                #vmd = vmdData()
                 for i in range(0, len(axes)):
                     yAxes[i].scatter(xAxis, plots[pair+1][axes[i]], c=color, s=15)
                     yAxes[i].plot(xAxis, plots[pair+1][axes[i]])
+                    #yAxes[i].plot(xAxis, plots[pair + 1][-3])
                     yAxes[i].grid(True)
                     yAxes[i].set_title(titles[axes[i]])
                     yAxes[i].set_ylabel(yLabels[axes[i]], fontsize=10)
@@ -797,6 +720,33 @@ def plotAllData(color='r'):
 
     plt.show()
 
+def giveOutFile(outFile):
+    top = True
+    for p in range(len(plots)):
+        if p % 2 == 0:
+            outFile.write("{}\nN\t{}\n\n".format(plots[p], binCount))
+            outFile2Name = list(plots[p])
+            for c in range(len(outFile2Name)):
+                if outFile2Name[c] == " ":
+                    outFile2Name[c] = "_"
+            outFile2Name = "".join(outFile2Name)
+            outFile2 = open("{}.dat".format(outFile2Name), 'w')
+        else:
+            for d in range(binCount):
+                outFile.write("\t{}\t\t{}\t\t{}\t\t{}\n".format(d, (binSize * d), plots[p][3][d], plots[p][2][d]))
+                for s in range(len(plots[p])):
+                    if top:
+                        outFile2.write("#")
+                        for s2 in range(len(plots[p])):
+                            outFile2.write("\t\t\t\t{}".format(shortTitles[s2]))
+                        outFile2.write("\n")
+                        top = False
+                    outFile2.write("\t\t\t\t{}".format(plots[p][s][d]))
+                outFile2.write("\n")
+
+    outFile.close()
+
+
 # main program
 def main():
 
@@ -811,7 +761,7 @@ def main():
     getPsf(configFile)
 
     # Get name of PDB file from config file
-    getPdb(configFile)
+    #getPdb(configFile)
 
     # Get names of Force DCD files from config file
     getForceDCDs(configFile)
@@ -823,7 +773,7 @@ def main():
     getParam(configFile)
 
     # Define coordinate min/max and bin size
-    getCoordBounds(configFile, pdb)
+    getCoordBounds(configFile)
 
     # Get temperature from config file
     getTemp(configFile)
@@ -831,14 +781,8 @@ def main():
     # Get plot order from config file
     getPlotOrder(configFile)
 
-    # Get user-defined atom groups
-    getGroups(configFile)
-
     # Initialize MD Analysis
     initMDA()
-
-    # Consolidate atom groups into single sites
-    groupToSingleSite()
 
     # Define epsilon and sigma values for particles of interest
     defineEpsilonSigma(param)
@@ -848,7 +792,11 @@ def main():
 
     end = time.time()
     t = end - start
-    print "\nTotal running time: {} sec".format(t)
+    print "\nTotal running time: {:.2f} sec".format(t)
+
+    # Make output file
+    outFile = open(outFileName, 'w')
+    giveOutFile(outFile)
 
     # Generate figures and plots
     plotAllData()
