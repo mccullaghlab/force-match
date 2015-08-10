@@ -5,6 +5,7 @@ import numpy
 import MDAnalysis
 import time
 import math
+import sys
 
 
 # FILE VARIABLES
@@ -327,6 +328,8 @@ def iterate():
         print "-- Iterating through all particle pairs in first time step to establish pair types"
     for ts in coord.trajectory:                 # Iterate through all time steps
         tsf = force.trajectory[ts.frame-1]
+        sys.stdout.write("Progress: {0:.2f}% Complete\r".format((float(ts.frame) / float(len(coord.trajectory))) * 100))
+        sys.stdout.flush()
         for a in ionsCoord:                     # First particle
             for b in ionsCoord:                 # Second particle
                 if a.number < b.number:        # Ensure particles don't have same index
@@ -346,8 +349,8 @@ def iterate():
                         computeCoordData(a, b)
                         computeForceData(a, b)
 
-        if ts.frame == exTs:                        # Print a sample of the data we've computed
-            exampleTimestepDebug()
+        #if ts.frame == exTs:                        # Print a sample of the data we've computed
+            #exampleTimestepDebug()
 
     postProcess()
 
